@@ -12,7 +12,9 @@ import {
   CheckCircle2, 
   History,
   Users,
-  Trash2
+  Trash2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 export default function StaffManagement() {
@@ -30,6 +32,7 @@ export default function StaffManagement() {
   const [role, setRole] = useState<'SUPER_ADMIN' | 'STAFF'>('STAFF');
   const [status, setStatus] = useState<string>('authorized');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // Search & Filters
   const [search, setSearch] = useState('');
@@ -103,6 +106,7 @@ export default function StaffManagement() {
     setRole('STAFF');
     setStatus('authorized');
     setPassword('');
+    setShowPassword(false);
     setError(null);
     setSuccess(null);
     setShowModal(true);
@@ -115,6 +119,7 @@ export default function StaffManagement() {
     setRole(displayRole(staff.role));
     setStatus(staff.status);
     setPassword('');
+    setShowPassword(false);
     setError(null);
     setSuccess(null);
     setShowModal(true);
@@ -498,19 +503,35 @@ export default function StaffManagement() {
                 />
               </div>
 
-              {/* Password */}
+              {/* Password - Super Admin can reveal (show) and change it here */}
               <div>
                 <label className="block text-[10px] font-mono font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  {editingStaff ? 'Reset Password (Optional)' : 'Initial Password'}
+                  {editingStaff ? 'Password' : 'Initial Password'}
                 </label>
-                <input
-                  type="password"
-                  required={!editingStaff}
-                  placeholder={editingStaff ? 'Leave empty to keep current password' : '••••••••'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required={!editingStaff}
+                    placeholder={editingStaff ? 'Leave empty to keep current password' : '••••••••'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-3 py-2 pr-10 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {editingStaff && (
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Toggle the eye to review the password; type a new one to change it.
+                  </p>
+                )}
               </div>
 
               {/* Role Selection */}

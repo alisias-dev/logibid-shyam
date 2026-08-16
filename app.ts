@@ -1173,8 +1173,12 @@ app.put('/api/transporters/:id', authenticate, authorize(['SUPER_ADMIN', 'LOGIST
     const { newEmail, password, ...rest } = updateData;
     const updated: any = { ...existing, ...rest };
 
-    // Mass-assignment hardening
-    delete updated.id;
+    // Mass-assignment hardening: the primary key and the raw password hash are
+    // NEVER settable through the API. The id is restored from the existing
+    // record (any client-supplied id in `rest` is ignored) - the row MUST keep
+    // its key or the Postgres diff-sync treats it as a brand-new row and
+    // refuses the write. The hash is replaced below when a new password is set.
+    updated.id = existing.id;
     delete updated.passwordHash;
 
     // Prevent changing registered mobile to block credential hijacking
@@ -1255,7 +1259,9 @@ app.post('/api/staff', authenticate, authorize(['SUPER_ADMIN']), async (req, res
   if (typeof role !== 'string' || !allowedRoles.includes(role)) {
     return res.status(400).json({ error: 'Invalid role. Must be SUPER_ADMIN, LOGISTICS or STAFF.' });
   }
-  if (typeof status !== 'string' || !allowedStatuses.includes(status)) {
+  // Case-insensitive on purpose - the UI submits lowercase statuses such as
+  // 'authorized' and legacy rows were imported in lowercase.
+  if (typeof status !== 'string' || !allowedStatuses.includes(status.toUpperCase())) {
     return res.status(400).json({ error: 'Invalid status. Must be AUTHORIZED, APPROVED, BLOCKED or ACTIVE.' });
   }
   if (typeof password !== 'string' || password.length < 8) {
@@ -1327,9 +1333,12 @@ app.put('/api/staff/:id', authenticate, authorize(['SUPER_ADMIN']), async (req, 
     const updated: any = { ...existing, ...rest };
 
     // Mass-assignment hardening: the primary key and the raw password hash are
-    // NEVER settable through the API, no matter what the caller sends. The hash
-    // is restored from the existing record unless a new password is provided.
-    delete updated.id;
+    // NEVER settable through the API, no matter what the caller sends. The id
+    // is restored from the existing record (any client-supplied id in `rest` is
+    // ignored) - the row MUST keep its key or the Postgres diff-sync treats it
+    // as a brand-new row and refuses the write. The hash is restored from the
+    // existing record unless a new password is provided below.
+    updated.id = existing.id;
     delete updated.passwordHash;
 
     // Validate enum fields if provided (case-insensitive - the UI stores
