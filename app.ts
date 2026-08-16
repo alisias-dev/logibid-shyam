@@ -1250,10 +1250,10 @@ app.post('/api/staff', authenticate, authorize(['SUPER_ADMIN']), async (req, res
     return res.status(400).json({ error: 'All fields (email, name, role, status, password) are required to onboard staff.' });
   }
 
-  const allowedRoles = ['SUPER_ADMIN', 'LOGISTICS'];
+  const allowedRoles = ['SUPER_ADMIN', 'LOGISTICS', 'STAFF'];
   const allowedStatuses = ['AUTHORIZED', 'APPROVED', 'BLOCKED', 'ACTIVE'];
   if (typeof role !== 'string' || !allowedRoles.includes(role)) {
-    return res.status(400).json({ error: 'Invalid role. Must be SUPER_ADMIN or LOGISTICS.' });
+    return res.status(400).json({ error: 'Invalid role. Must be SUPER_ADMIN, LOGISTICS or STAFF.' });
   }
   if (typeof status !== 'string' || !allowedStatuses.includes(status)) {
     return res.status(400).json({ error: 'Invalid status. Must be AUTHORIZED, APPROVED, BLOCKED or ACTIVE.' });
@@ -1274,11 +1274,16 @@ app.post('/api/staff', authenticate, authorize(['SUPER_ADMIN']), async (req, res
 
     const passwordHash = await bcrypt.hash(password, 10);
 
+    // STAFF is the public-facing name of the LOGISTICS permission role: the
+    // form submits 'STAFF' and we normalize it to the existing LOGISTICS role
+    // so the stored record, JWT, and every permission check stay unchanged.
+    const storedRole = role === 'STAFF' ? 'LOGISTICS' : role;
+
     const newStaff: User = {
       id: generateId('usr'),
       email,
       name,
-      role: role as 'SUPER_ADMIN' | 'LOGISTICS',
+      role: storedRole as 'SUPER_ADMIN' | 'LOGISTICS',
       status,
       passwordHash
     };
@@ -1329,8 +1334,12 @@ app.put('/api/staff/:id', authenticate, authorize(['SUPER_ADMIN']), async (req, 
 
     // Validate enum fields if provided (case-insensitive - the UI stores
     // lowercase statuses such as 'approved')
-    if (updated.role !== undefined && !['SUPER_ADMIN', 'LOGISTICS'].includes(String(updated.role).toUpperCase())) {
-      return res.status(400).json({ error: 'Invalid role. Must be SUPER_ADMIN or LOGISTICS.' });
+    if (updated.role !== undefined && !['SUPER_ADMIN', 'LOGISTICS', 'STAFF'].includes(String(updated.role).toUpperCase())) {
+      return res.status(400).json({ error: 'Invalid role. Must be SUPER_ADMIN, LOGISTICS or STAFF.' });
+    }
+    // Normalize the user-facing 'STAFF' role to the LOGISTICS permission role.
+    if (updated.role !== undefined && String(updated.role).toUpperCase() === 'STAFF') {
+      updated.role = 'LOGISTICS';
     }
     if (updated.status !== undefined && !['AUTHORIZED', 'APPROVED', 'BLOCKED', 'ACTIVE'].includes(String(updated.status).toUpperCase())) {
       return res.status(400).json({ error: 'Invalid status. Must be AUTHORIZED, APPROVED, BLOCKED or ACTIVE.' });

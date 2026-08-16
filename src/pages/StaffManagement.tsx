@@ -27,7 +27,7 @@ export default function StaffManagement() {
   // Form State
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'SUPER_ADMIN' | 'LOGISTICS'>('LOGISTICS');
+  const [role, setRole] = useState<'SUPER_ADMIN' | 'STAFF'>('STAFF');
   const [status, setStatus] = useState<string>('authorized');
   const [password, setPassword] = useState('');
 
@@ -40,6 +40,9 @@ export default function StaffManagement() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // STAFF is the user-facing name of the LOGISTICS backend permission role.
+  const displayRole = (r: string): 'SUPER_ADMIN' | 'STAFF' => (r === 'LOGISTICS' || r === 'STAFF') ? 'STAFF' : 'SUPER_ADMIN';
 
   // Deletion Confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -97,7 +100,7 @@ export default function StaffManagement() {
     setEditingStaff(null);
     setName('');
     setEmail('');
-    setRole('LOGISTICS');
+    setRole('STAFF');
     setStatus('authorized');
     setPassword('');
     setError(null);
@@ -109,7 +112,7 @@ export default function StaffManagement() {
     setEditingStaff(staff);
     setName(staff.name);
     setEmail(staff.email);
-    setRole(staff.role);
+    setRole(displayRole(staff.role));
     setStatus(staff.status);
     setPassword('');
     setError(null);
@@ -183,7 +186,7 @@ export default function StaffManagement() {
       s.email.toLowerCase().includes(search.toLowerCase());
 
     const matchesStatus = statusFilter === 'ALL' || s.status.toUpperCase() === statusFilter.toUpperCase();
-    const matchesRole = roleFilter === 'ALL' || s.role === roleFilter;
+    const matchesRole = roleFilter === 'ALL' || displayRole(s.role) === roleFilter;
 
     return matchesSearch && matchesStatus && matchesRole;
   });
@@ -255,7 +258,7 @@ export default function StaffManagement() {
           >
             <option value="ALL">All Roles</option>
             <option value="SUPER_ADMIN">Super Admin</option>
-            <option value="LOGISTICS">Logistics Executive</option>
+            <option value="STAFF">STAFF</option>
           </select>
         </div>
       </div>
@@ -319,7 +322,7 @@ export default function StaffManagement() {
                               ? 'bg-purple-50 dark:bg-purple-950/30 text-purple-600 dark:text-purple-400 border border-purple-200/50 dark:border-purple-900/20' 
                               : 'bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-900/20'
                           }`}>
-                            {staff.role}
+                            {displayRole(staff.role)}
                           </span>
                         </td>
                         <td className="py-3.5 px-4">
@@ -521,7 +524,7 @@ export default function StaffManagement() {
                   disabled={editingStaff?.email === 'aronkumar.logistics@gmail.com'}
                   className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
-                  <option value="LOGISTICS">Logistics Executive</option>
+                  <option value="STAFF">STAFF</option>
                   <option value="SUPER_ADMIN">Super Admin</option>
                 </select>
               </div>

@@ -4,9 +4,6 @@ import autoTable from 'jspdf-autotable';
 import { FileDown, Loader2 } from 'lucide-react';
 import api from '../lib/api';
 import { useAuth } from './AuthContext';
-// Great Vibes - cursive signature font, bundled as a static asset (Vite emits
-// it to dist/ and gives us a URL to load at runtime).
-import greatVibesUrl from '../assets/fonts/GreatVibes-Regular.ttf';
 
 /**
  * Data required to render the official award record. The page resolves the
@@ -34,34 +31,6 @@ export interface AwardPdfData {
 const COMPANY = 'SHYAM FERRO ALLOYS LTD';
 const SUBTITLE = 'Official Logistics Award Record';
 const PLATFORM = 'FleexBid';
-
-// ---------------------------------------------------------------------------
-// Font registration
-// ---------------------------------------------------------------------------
-let fontBase64Promise: Promise<string> | null = null;
-
-/**
- * Fetch the cursive signature font once and cache its base64 payload.
- * (jsPDF fonts are per-document-instance, so the base64 is cached here and
- * registered on each generating doc inside generateOfficialAwardPdf.)
- */
-function getSignatureFontBase64(): Promise<string> {
-  if (!fontBase64Promise) {
-    fontBase64Promise = (async () => {
-      const res = await fetch(greatVibesUrl);
-      const buffer = await res.arrayBuffer();
-      // jsPDF wants a base64 string in its virtual file system.
-      const bytes = new Uint8Array(buffer);
-      let binary = '';
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as any);
-      }
-      return btoa(binary);
-    })();
-  }
-  return fontBase64Promise;
-}
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -109,17 +78,63 @@ function fmtTimeCompact(iso: string | null): string {
 // ---------------------------------------------------------------------------
 export async function generateOfficialAwardPdf(data: AwardPdfData): Promise<void> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  // Register the cursive signature font on THIS document instance (jsPDF fonts
-  // are not global — they must be added to the doc that renders them).
-  const signatureBase64 = await getSignatureFontBase64();
-  doc.addFileToVFS('GreatVibes-Regular.ttf', signatureBase64);
-  doc.addFont('GreatVibes-Regular.ttf', 'GreatVibes', 'normal');
   const pageW = doc.internal.pageSize.getWidth(); // 210
   const pageH = doc.internal.pageSize.getHeight(); // 297
   const margin = 18;
   const contentW = pageW - margin * 2;
   const navy: [number, number, number] = [23, 42, 79];
   const gold: [number, number, number] = [176, 141, 61];
+
+  // -------------------------------------------------------------------------
+  // Strict table-overflow guard (shared by every autoTable below):
+  //  - overflow: 'linebreak' wraps long content instead of letting it spill.
+  //  - didParseCell auto-shrinks the font of any cell whose text is wider than
+  //    its column, so huge bid amounts / long timestamps always stay inside
+  //    their cell borders (the shrink happens before autotable re-splits text).
+  //  - every column has an explicit fixed width summing to contentW, and all
+  //    cells get consistent padding so nothing auto-expands past the grid.
+  // -------------------------------------------------------------------------
+  const baseTableStyles: any = {
+    fontSize: 9.5,
+    cellPadding: { top: 2.4, right: 2.8, bottom: 2.4, left: 2.8 },
+    textColor: [40, 45, 60],
+    lineColor: [200, 205, 218],
+    lineWidth: 0.15,
+    overflow: 'linebreak',
+    valign: 'middle',
+    minCellHeight: 7
+  };
+  const makeConstrainLongCells = (columnWidths: Record<number, number>, spanWidth: number) => (hookData: any) => {
+    const { cell } = hookData;
+    if (!cell || !cell.text || cell.text.length === 0) return;
+    const text = cell.text.join(' ');
+    // During didParseCell the cell's final width is not computed yet, so we
+    // use the explicit widths configured for each column (colSpan cells span
+    // the summed widths of the columns they cover).
+    let colW: number;
+    if (cell.colSpan && cell.colSpan > 1) {
+      let w = 0;
+      for (let i = hookData.column.index; i < hookData.column.index + cell.colSpan; i++) {
+        w += columnWidths[i] ?? 0;
+      }
+      colW = w || spanWidth;
+    } else {
+      colW = columnWidths[hookData.column.index] || spanWidth;
+    }
+    const usable = colW - cell.padding('left') - cell.padding('right');
+    if (usable <= 4) return;
+    const scale = hookData.doc.internal.scaleFactor || 2.835;
+    const baseSize = cell.styles.fontSize || 9.5;
+    const widthAt = (s: number) => (hookData.doc.getStringUnitWidth(text) * s) / scale;
+    let size = baseSize;
+    while (widthAt(size) > usable && size > 5.5) size -= 0.5;
+    if (size < baseSize) cell.styles.fontSize = size;
+  };
+
+  // Column width maps for each table (must sum to contentW = 174mm).
+  const reqColWidths = { 0: 52, 1: 35, 2: 52, 3: 35 };
+  const awardColWidths = { 0: 52, 1: 41, 2: 41, 3: 40 };
+  const bidColWidths = { 0: 72, 1: 50, 2: 52 };
 
   // ---- Corporate header ----
   doc.setFillColor(...navy);
@@ -201,8 +216,9 @@ export async function generateOfficialAwardPdf(data: AwardPdfData): Promise<void
       ]
     ],
     theme: 'grid',
-    styles: { fontSize: 9.5, cellPadding: 2.6, textColor: [40, 45, 60], lineColor: [200, 205, 218], lineWidth: 0.15 },
-    columnStyles: { 0: { cellWidth: 52 }, 2: { cellWidth: 52 } }
+    styles: baseTableStyles,
+    columnStyles: { 0: { cellWidth: reqColWidths[0] }, 1: { cellWidth: reqColWidths[1] }, 2: { cellWidth: reqColWidths[2] }, 3: { cellWidth: reqColWidths[3] } },
+    didParseCell: makeConstrainLongCells(reqColWidths, contentW)
   });
 
   y = (doc as any).lastAutoTable.finalY + 10;
@@ -231,8 +247,9 @@ export async function generateOfficialAwardPdf(data: AwardPdfData): Promise<void
       ]
     ],
     theme: 'grid',
-    styles: { fontSize: 9.5, cellPadding: 2.6, textColor: [40, 45, 60], lineColor: [200, 205, 218], lineWidth: 0.15 },
-    columnStyles: { 0: { cellWidth: 52 } }
+    styles: baseTableStyles,
+    columnStyles: { 0: { cellWidth: awardColWidths[0] }, 1: { cellWidth: awardColWidths[1] }, 2: { cellWidth: awardColWidths[2] }, 3: { cellWidth: awardColWidths[3] } },
+    didParseCell: makeConstrainLongCells(awardColWidths, contentW)
   });
 
   y = (doc as any).lastAutoTable.finalY + 10;
@@ -268,11 +285,12 @@ export async function generateOfficialAwardPdf(data: AwardPdfData): Promise<void
         ? bidRows
         : [[{ content: 'No bids were submitted for this auction.', colSpan: 3, styles: { fontStyle: 'italic', textColor: [120, 125, 140] } }]],
     theme: 'grid',
-    styles: { fontSize: 9.5, cellPadding: 2.6, textColor: [40, 45, 60], lineColor: [200, 205, 218], lineWidth: 0.15 },
-    columnStyles: { 0: { cellWidth: 92 }, 2: { cellWidth: 46 } },
+    styles: baseTableStyles,
+    columnStyles: { 0: { cellWidth: bidColWidths[0] }, 1: { cellWidth: bidColWidths[1] }, 2: { cellWidth: bidColWidths[2] } },
     // autoTable breaks long histories onto additional pages automatically and
     // repeats the head rows so a multi-page table stays readable.
-    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', fontSize: 10 }
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold', fontSize: 10 },
+    didParseCell: makeConstrainLongCells(bidColWidths, contentW)
   });
 
   y = (doc as any).lastAutoTable.finalY + 14;
@@ -301,12 +319,8 @@ export async function generateOfficialAwardPdf(data: AwardPdfData): Promise<void
   const sigW = 88;
   const blockY = Math.max(y, pageH - 64);
 
-  // Cursive digital-signature placeholder (Great Vibes) above the title.
-  doc.setFont('GreatVibes', 'normal');
-  doc.setFontSize(26);
-  doc.setTextColor(...navy);
-  doc.text('A. Kumar', sigX, blockY);
-
+  // The space above the authorization line (where the name previously sat) is
+  // intentionally left blank; every other element keeps its original position.
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(110, 115, 130);
