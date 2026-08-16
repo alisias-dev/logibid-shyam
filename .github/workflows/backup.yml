@@ -69,9 +69,9 @@ jobs:
           if-no-files-found: error
 
       # Optional: mirror the snapshot to S3 / Cloudflare R2 for permanent
-      # offsite retention. Configured only when the secrets below exist.
+      # offsite retention. Runs only when the secrets below are configured
+      # (secrets cannot be referenced in step-level if:, so the script checks).
       - name: Upload to S3 / R2 (optional)
-        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_S3_BUCKET != '' }}
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -79,6 +79,10 @@ jobs:
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
         run: |
+          if [ -z "${AWS_ACCESS_KEY_ID}" ] || [ -z "${AWS_S3_BUCKET}" ]; then
+            echo "S3/R2 secrets not configured - skipping mirror (artifact archive is still uploaded)"
+            exit 0
+          fi
           ENDPOINT="${AWS_ENDPOINT_URL:-https://s3.${AWS_REGION:-us-east-1}.amazonaws.com}"
           aws s3 sync backups/ "s3://${AWS_S3_BUCKET}/fleexbid-backups/" --endpoint-url "$ENDPOINT"
           echo "Mirrored snapshot to s3://${AWS_S3_BUCKET}/fleexbid-backups/"
