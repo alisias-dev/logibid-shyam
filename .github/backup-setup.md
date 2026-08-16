@@ -34,6 +34,9 @@ with SHA-256 checksums), verifies it, archives it, and alerts you on failure.
 With R2: create a bucket, an API token with `Object Read & Write`, and set
 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` to its access key / secret key.
 
+> Because the GitHub artifact is deleted after 7 days, the S3/R2 mirror (or the
+> Neon snapshot in `docs/BACKUP.md`) is what covers anything older than a week.
+
 ## 3. Push & activate
 
 ```bash
@@ -61,6 +64,11 @@ git push origin main
 
 - All steps green, `Verify snapshot integrity` prints
   `Integrity OK - all 15 tables verified (checksums + row counts)`
-- An artifact `fleexbid-backup-N` exists with retention `90 days`
+- An artifact `fleexbid-backup-N` exists with **7-day retention** and
+  maximum compression (level 9) - GitHub auto-deletes old snapshots so the
+  free-tier 500 MB artifact storage is never approached
+- Only `pg` + `dotenv` are installed (`npm ci --prefix scripts`), keeping the
+  run under ~5 min so the 2,000 free compute minutes/month are never at risk
+  (the daily cron uses ~30 runs/month)
 - On any failure: the `Alert on failure` step logs `::error::` and (if configured)
   POSTs to your webhook; GitHub also emails admins for failed scheduled runs

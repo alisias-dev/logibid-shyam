@@ -1,0 +1,10 @@
+{
+  "name": "fleexbid-backup-scripts",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Minimal dependencies for scripts/backup.mjs and scripts/restore.mjs (installed by the GitHub Actions backup workflow to keep compute minutes low).",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "pg": "^8.22.0"
+  }
+}

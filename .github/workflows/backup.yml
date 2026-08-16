@@ -1,16 +1,26 @@
 name: Database Backup
 
 # Runs daily at 00:00 UTC (05:30 IST) plus on manual trigger.
+# Free-tier budget guardrails:
+#   - 1 run/day  -> ~30 runs/month, each well under 5 min of compute
+#   - Only pg + dotenv installed (scripts/package.json), not the whole app
+#   - Artifacts auto-deleted after 7 days (retention-days), max-compressed
+#     (compression-level 9) so 500 MB artifact storage is never approached
 on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch: {}
 
+# Never run two backups at once (avoids overlapping runs burning minutes).
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
 jobs:
   backup:
     name: Full snapshot + archive
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: write   # required to upload workflow artifacts
@@ -23,10 +33,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      # Minimal install: only the backup scripts' dependencies (pg, dotenv)
+      # from scripts/package-lock.json. Do NOT npm ci the full app - the
+      # workflow never runs application code, so that would waste compute
+      # minutes for nothing.
+      - name: Install minimal dependencies
+        run: npm ci --prefix scripts
 
       - name: Run backup
         id: backup
@@ -60,12 +73,18 @@ jobs:
             console.log("Integrity OK - all " + tables.length + " tables verified (checksums + row counts)");
           '
 
-      - name: Archive snapshot (GitHub artifact, 90-day retention)
+      # Free-tier guardrails:
+      #   - retention-days: 7  -> GitHub auto-deletes old snapshots, keeping
+      #     artifact storage ~7 snapshots (~1 MB) instead of growing to 90.
+      #   - compression-level: 9 -> maximum zlib compression on the archive;
+      #     the JSON snapshots are highly compressible (typically 5-10x).
+      - name: Archive snapshot (GitHub artifact, 7-day retention)
         uses: actions/upload-artifact@v4
         with:
           name: fleexbid-backup-${{ github.run_number }}
           path: backups/
-          retention-days: 90
+          retention-days: 7
+          compression-level: 9
           if-no-files-found: error
 
       # Optional: mirror the snapshot to S3 / Cloudflare R2 for permanent
