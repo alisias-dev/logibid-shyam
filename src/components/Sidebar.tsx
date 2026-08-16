@@ -84,9 +84,11 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         {/* Brand logo & close button */}
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-100 dark:border-slate-900 gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-bold text-lg shadow-md shadow-blue-500/20">
-              L
-            </div>
+            <img
+              src="/favicon.png"
+              alt="FleexBid"
+              className="w-8 h-8 rounded-lg shadow-md shadow-blue-500/20"
+            />
             <div>
               <span className="font-semibold text-slate-950 dark:text-white tracking-tight">FleexBid</span>
               <span className="text-[10px] font-mono text-slate-400 block -mt-1 uppercase tracking-wider">Enterprise</span>

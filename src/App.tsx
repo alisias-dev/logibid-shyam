@@ -37,9 +37,11 @@ function Layout({ children }: { children: React.ReactNode }) {
               <Menu className="w-6 h-6" />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-bold text-sm shadow-md">
-                L
-              </div>
+              <img
+                src="/favicon.png"
+                alt="FleexBid"
+                className="w-7 h-7 rounded-lg shadow-md"
+              />
               <span className="font-semibold text-sm text-slate-950 dark:text-white">FleexBid</span>
             </div>
           </div>

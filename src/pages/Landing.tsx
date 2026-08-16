@@ -89,9 +89,11 @@ export default function Landing() {
         >
           <nav className="mx-auto max-w-7xl px-6 lg:px-8 h-16 flex items-center justify-between pointer-events-auto">
             <Link to="/" className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-400 to-blue-600 flex items-center justify-center text-white font-extrabold text-sm shadow-lg shadow-sky-500/30">
-                F
-              </div>
+              <img
+                src="/favicon.png"
+                alt="FleexBid"
+                className="w-8 h-8 rounded-lg shadow-lg shadow-sky-500/30"
+              />
               <span className="font-bold tracking-tight text-lg">FleexBid</span>
             </Link>
 
@@ -356,9 +358,11 @@ export default function Landing() {
         <footer className="relative border-t border-white/10 bg-slate-950/60 backdrop-blur-xl">
           <div className="mx-auto max-w-7xl px-6 lg:px-8 py-10 flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-sky-400 to-blue-600 flex items-center justify-center text-white font-extrabold text-xs shadow-lg shadow-sky-500/30">
-                F
-              </div>
+              <img
+                src="/favicon.png"
+                alt="FleexBid"
+                className="w-7 h-7 rounded-lg shadow-lg shadow-sky-500/30"
+              />
               <span className="font-bold tracking-tight">FleexBid</span>
             </div>
             <div className="flex items-center gap-6 text-xs text-slate-400 font-mono">

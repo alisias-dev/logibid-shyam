@@ -80,9 +80,11 @@ export default function Login() {
       <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden">
         {/* Top brand header */}
         <div className="px-8 pt-8 pb-6 bg-slate-50/50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-900 flex flex-col items-center">
-          <div className="w-12 h-12 rounded-xl bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-extrabold text-2xl shadow-lg shadow-blue-500/25 mb-4">
-            L
-          </div>
+          <img
+            src="/fleexbid-logo.png"
+            alt="FleexBid"
+            className="w-28 h-auto mb-4"
+          />
           <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">FleexBid Secure Gateway</h2>
           <p className="text-xs text-slate-400 mt-1 font-mono text-center">
             ROBUST SEALED REVERSE AUCTIONS FOR LOGISTICS
