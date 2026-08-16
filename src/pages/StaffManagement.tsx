@@ -84,11 +84,12 @@ export default function StaffManagement() {
 
   async function loadAuditLogs() {
     try {
-      const data = await api.get('/logs/audit');
+      // Newest-first, paginated (large limit so client-side filtering sees enough history)
+      const data = await api.get('/logs/audit?limit=500');
       const staffLogs = (data.logs || []).filter((l: any) => 
         l.action.includes('STAFF') || l.action.includes('USER')
       );
-      setAuditLogs(staffLogs.reverse());
+      setAuditLogs(staffLogs);
     } catch {}
   }
 

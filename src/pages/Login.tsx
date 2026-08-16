@@ -83,7 +83,7 @@ export default function Login() {
           <div className="w-12 h-12 rounded-xl bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-extrabold text-2xl shadow-lg shadow-blue-500/25 mb-4">
             L
           </div>
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">LogiBid Secure Gateway</h2>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">FleexBid Secure Gateway</h2>
           <p className="text-xs text-slate-400 mt-1 font-mono text-center">
             ROBUST SEALED REVERSE AUCTIONS FOR LOGISTICS
           </p>
@@ -164,9 +164,9 @@ export default function Login() {
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                     Password
                   </label>
-                  <a href="#" className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
-                    Reset Password
-                  </a>
+                  {/* Self-service password reset is intentionally not offered:
+                      staff passwords are reset by the Super Admin (Staff page);
+                      transporter passwords are reset by staff (Transporters page). */}
                 </div>
                 <div className="relative">
                   <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -245,7 +245,7 @@ export default function Login() {
 
         {/* Footer help */}
         <div className="px-8 pb-8 text-center text-[11px] text-slate-400/80 border-t border-slate-100 dark:border-slate-900 pt-4 font-mono">
-          © 2026 LOGIBID SYSTEMS • SECURE BIDDING NETWORKS
+          © 2026 FLEEXBID SYSTEMS • SECURE BIDDING NETWORKS
         </div>
       </div>
 

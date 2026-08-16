@@ -4,6 +4,7 @@ import { ThemeProvider } from './components/ThemeContext';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import Sidebar from './components/Sidebar';
 import Login from './pages/Login';
+import Landing from './pages/Landing';
 import Dashboard from './pages/Dashboard';
 import RequirementsList from './pages/RequirementsList';
 import RequirementDetail from './pages/RequirementDetail';
@@ -39,7 +40,7 @@ function Layout({ children }: { children: React.ReactNode }) {
               <div className="w-7 h-7 rounded-lg bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-bold text-sm shadow-md">
                 L
               </div>
-              <span className="font-semibold text-sm text-slate-950 dark:text-white">LogiBid</span>
+              <span className="font-semibold text-sm text-slate-950 dark:text-white">FleexBid</span>
             </div>
           </div>
         </header>
@@ -67,7 +68,8 @@ function AuthenticatedApp() {
   }
 
   if (!user) {
-    return <Login />;
+    // Public marketing landing — sign-in happens at /login
+    return <Landing />;
   }
 
   return (
@@ -104,7 +106,12 @@ export default function App() {
     <ThemeProvider>
       <BrowserRouter>
         <AuthProvider>
-          <AuthenticatedApp />
+          <Routes>
+            {/* Public routes (no auth gate) */}
+            <Route path="/login" element={<Login />} />
+            {/* Everything else: authenticated app shell, or Landing when logged out */}
+            <Route path="/*" element={<AuthenticatedApp />} />
+          </Routes>
         </AuthProvider>
       </BrowserRouter>
     </ThemeProvider>

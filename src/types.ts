@@ -1,5 +1,5 @@
 /**
- * LogiBid Type Definitions
+ * FleexBid Type Definitions
  */
 
 export type UserRole = 'SUPER_ADMIN' | 'LOGISTICS' | 'TRANSPORTER';
@@ -11,6 +11,7 @@ export interface User {
   role: 'SUPER_ADMIN' | 'LOGISTICS';
   name: string;
   status: string;
+  isDeleted?: boolean;
 }
 
 export interface Transporter {
@@ -26,9 +27,17 @@ export interface Transporter {
   preferredRoutes: string[];
   status: string;
   passwordHash?: string;
+  isDeleted?: boolean;
 }
 
 export type RequirementStatus = 'DRAFT' | 'LIVE' | 'CLOSED' | 'AWARDED' | 'CANCELLED' | 'TIE_RESOLUTION_REQUIRED' | 'active' | 'published';
+
+/**
+ * Standardized vehicle types accepted by the Launch New Bidding Round workflow.
+ * Legacy rows created before standardization may still hold older free-text values.
+ */
+export const VEHICLE_TYPES = ['TRUCK', 'DUMPER', 'TRAILER', 'CONTAINER BODY', 'OTHER'] as const;
+export type VehicleType = typeof VEHICLE_TYPES[number];
 
 export interface Requirement {
   id: string; // e.g. TR-2026-0001
@@ -46,10 +55,12 @@ export interface Requirement {
   bidClosingTime: string;
   targetRate: number | null;
   awardType: 'MANUAL' | 'AUTOMATIC';
+  vehicleSpecs?: string; // Custom vehicle specification remark / note
   status: RequirementStatus;
   createdAt: string;
   targeted_transporter_ids?: string[]; // Specified transporter IDs
   targetedTransporterIds?: string[];
+  isDeleted?: boolean;
 }
 
 export interface RequirementInvitation {

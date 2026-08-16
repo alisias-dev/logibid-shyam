@@ -88,7 +88,7 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
               L
             </div>
             <div>
-              <span className="font-semibold text-slate-950 dark:text-white tracking-tight">LogiBid</span>
+              <span className="font-semibold text-slate-950 dark:text-white tracking-tight">FleexBid</span>
               <span className="text-[10px] font-mono text-slate-400 block -mt-1 uppercase tracking-wider">Enterprise</span>
             </div>
           </div>

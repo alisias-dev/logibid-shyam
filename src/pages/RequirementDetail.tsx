@@ -22,6 +22,7 @@ import {
   Timer,
   Send
 } from 'lucide-react';
+import ExportAwardPdfButton from '../components/OfficialAwardPdf';
 
 export default function RequirementDetail() {
   const { id } = useParams<{ id: string }>();
@@ -56,9 +57,16 @@ export default function RequirementDetail() {
   useEffect(() => {
     loadRequirementAndRanks();
 
-    // Establish dynamic WebSocket connection
-    const socket = io(window.location.origin);
+    // Establish dynamic WebSocket connection. The server rejects unauthenticated
+    // socket handshakes. The HttpOnly accessToken cookie is attached to the
+    // same-origin handshake automatically, so no JS-readable token is passed.
+    const socket = io(window.location.origin, {
+      withCredentials: true
+    });
     socketRef.current = socket;
+    socket.on('connect_error', (err) => {
+      console.error('Socket connection failed:', err.message);
+    });
 
     socket.emit('join_requirement', id);
 
@@ -277,15 +285,20 @@ export default function RequirementDetail() {
             </div>
           </div>
 
-          <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border self-start sm:self-auto ${
-            requirement.status === 'LIVE' ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/30' :
-            requirement.status === 'AWARDED' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-900/30' :
-            requirement.status === 'DRAFT' ? 'bg-slate-50 dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800' :
-            requirement.status === 'TIE_RESOLUTION_REQUIRED' ? 'bg-rose-50 dark:bg-rose-950/30 text-rose-500 border-rose-200 dark:border-rose-900/30 animate-pulse' :
-            'bg-slate-100 dark:bg-slate-800 text-slate-400'
-          }`}>
-            {requirement.status.replace(/_/g, ' ')}
-          </span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 self-start sm:self-auto">
+            {requirement.status === 'AWARDED' && (
+              <ExportAwardPdfButton requirement={requirement} />
+            )}
+            <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase border ${
+              requirement.status === 'LIVE' ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/30' :
+              requirement.status === 'AWARDED' ? 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-900/30' :
+              requirement.status === 'DRAFT' ? 'bg-slate-50 dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800' :
+              requirement.status === 'TIE_RESOLUTION_REQUIRED' ? 'bg-rose-50 dark:bg-rose-950/30 text-rose-500 border-rose-200 dark:border-rose-900/30 animate-pulse' :
+              'bg-slate-100 dark:bg-slate-800 text-slate-400'
+            }`}>
+              {requirement.status.replace(/_/g, ' ')}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -385,6 +398,13 @@ export default function RequirementDetail() {
                 </div>
               </div>
             </div>
+
+            {requirement.vehicleSpecs && (
+              <div className="p-4 rounded-xl border space-y-1.5 bg-amber-50/70 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/30">
+                <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Vehicle Specifications / Remarks</div>
+                <p className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed font-mono whitespace-pre-wrap">{requirement.vehicleSpecs}</p>
+              </div>
+            )}
 
             {requirement.specialInstructions && (
               <div className="p-4 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-800 space-y-1">

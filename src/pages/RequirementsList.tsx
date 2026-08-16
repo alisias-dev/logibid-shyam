@@ -22,6 +22,7 @@ import {
   FileText
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import ExportAwardPdfButton from '../components/OfficialAwardPdf';
 
 export default function RequirementsList() {
   const { user } = useAuth();
@@ -71,11 +72,12 @@ export default function RequirementsList() {
     deliveryLocation: '',
     material: '',
     weight: '',
-    vehicleType: '32 FT Trailer',
+    vehicleType: 'TRUCK',
     numberOfVehicles: '1',
     pickupDate: '',
     expectedDelivery: '',
     specialInstructions: '',
+    vehicleSpecs: '',
     bidClosingTime: '',
     targetRate: '',
     awardType: 'MANUAL' as 'MANUAL' | 'AUTOMATIC',
@@ -89,11 +91,12 @@ export default function RequirementsList() {
       deliveryLocation: '',
       material: '',
       weight: '',
-      vehicleType: '32 FT Trailer',
+      vehicleType: 'TRUCK',
       numberOfVehicles: '1',
       pickupDate: '',
       expectedDelivery: '',
       specialInstructions: '',
+      vehicleSpecs: '',
       bidClosingTime: '',
       targetRate: '',
       awardType: 'MANUAL',
@@ -101,8 +104,12 @@ export default function RequirementsList() {
     }
   ]);
 
-  // General lists for dropdowns
-  const vehicleOptions = ['32 FT Trailer', '20 FT Container', '40 FT Container', '19 FT Open Truck'];
+  // Standardized vehicle types (single source for the Launch New Bidding Round workflow)
+  const vehicleOptions = ['TRUCK', 'DUMPER', 'TRAILER', 'CONTAINER BODY', 'OTHER'];
+  // All active transporters are eligible for a round; vehicle category selection was removed.
+  const activeTransporterIds = transporters
+    .filter(t => t.status === 'ACTIVE')
+    .map(t => t.id);
 
   useEffect(() => {
     loadRequirements();
@@ -160,11 +167,12 @@ export default function RequirementsList() {
       deliveryLocation: '',
       material: '',
       weight: '',
-      vehicleType: '32 FT Trailer',
+      vehicleType: 'TRUCK',
       numberOfVehicles: '1',
       pickupDate: '',
       expectedDelivery: '',
       specialInstructions: '',
+      vehicleSpecs: '',
       bidClosingTime: '',
       targetRate: '',
       awardType: 'MANUAL',
@@ -181,11 +189,12 @@ export default function RequirementsList() {
         deliveryLocation: '',
         material: '',
         weight: '',
-        vehicleType: '32 FT Trailer',
+        vehicleType: 'TRUCK',
         numberOfVehicles: '1',
         pickupDate: '',
         expectedDelivery: '',
         specialInstructions: '',
+        vehicleSpecs: '',
         bidClosingTime: '',
         targetRate: '',
         awardType: 'MANUAL',
@@ -203,12 +212,9 @@ export default function RequirementsList() {
     const updated = [...bulkRows];
     updated[index][field] = value;
     
-    // Auto populate default transporters if vehicle type changed
+    // Auto populate all active transporters as eligible for the round
     if (field === 'vehicleType') {
-      const matchingIds = transporters
-        .filter(t => t.status === 'ACTIVE' && t.vehicleTypes.includes(value))
-        .map(t => t.id);
-      updated[index].eligibleTransporters = matchingIds;
+      updated[index].eligibleTransporters = activeTransporterIds;
     }
     
     setBulkRows(updated);
@@ -246,11 +252,12 @@ export default function RequirementsList() {
           deliveryLocation: '',
           material: '',
           weight: '',
-          vehicleType: '32 FT Trailer',
+          vehicleType: 'TRUCK',
           numberOfVehicles: '1',
           pickupDate: '',
           expectedDelivery: '',
           specialInstructions: '',
+          vehicleSpecs: '',
           bidClosingTime: '',
           targetRate: '',
           awardType: 'MANUAL',
@@ -411,6 +418,13 @@ export default function RequirementsList() {
                           <span>Pickup: <strong className="text-slate-700 dark:text-slate-300">{new Date(req.pickupDate).toLocaleDateString()}</strong></span>
                         </div>
                       </div>
+
+                      {req.vehicleSpecs && (
+                        <div className="p-2.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/30 text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                          <span className="font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider text-[9px]">Vehicle Specs / Remarks: </span>
+                          {req.vehicleSpecs}
+                        </div>
+                      )}
                     </div>
 
                     {/* Timeline & Status */}
@@ -454,6 +468,9 @@ export default function RequirementsList() {
                           >
                             Enter Auction
                           </Link>
+                          {req.status === 'AWARDED' && (
+                            <ExportAwardPdfButton requirement={req} />
+                          )}
                           {user?.role === 'SUPER_ADMIN' && (
                             <button
                               onClick={() => {
@@ -581,16 +598,24 @@ export default function RequirementsList() {
                       value={singleForm.vehicleType}
                       onChange={(e) => {
                         const vType = e.target.value;
-                        // Prepopulate matching active transporters
-                        const matches = transporters
-                          .filter(t => t.status === 'ACTIVE' && t.vehicleTypes.includes(vType))
-                          .map(t => t.id);
-                        setSingleForm({...singleForm, vehicleType: vType, eligibleTransporters: matches});
+                        // Prepopulate all active transporters as eligible for the round
+                        setSingleForm({...singleForm, vehicleType: vType, eligibleTransporters: activeTransporterIds});
                       }}
                       className="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:ring-2 focus:ring-blue-500/20 dark:text-white"
                     >
                       {vehicleOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                     </select>
+                  </div>
+
+                  <div className="md:col-span-3">
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Vehicle Specifications / Remarks (Optional)</label>
+                    <textarea
+                      rows={3}
+                      placeholder="Add specific requirements like length, tonnage capacity, side height, open/closed, etc."
+                      value={singleForm.vehicleSpecs}
+                      onChange={(e) => setSingleForm({...singleForm, vehicleSpecs: e.target.value})}
+                      className="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:ring-2 focus:ring-blue-500/20 resize-y"
+                    />
                   </div>
 
                   <div>
@@ -659,7 +684,6 @@ export default function RequirementsList() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       {transporters.map(tr => {
-                        const isMatch = tr.vehicleTypes.includes(singleForm.vehicleType);
                         const isChecked = singleForm.eligibleTransporters.includes(tr.id);
 
                         return (
@@ -818,6 +842,16 @@ export default function RequirementsList() {
                               value={row.targetRate}
                               onChange={(e) => handleBulkRowChange(idx, 'targetRate', e.target.value)}
                               className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:ring-2 focus:ring-blue-500/20"
+                            />
+                          </div>
+
+                          <div className="md:col-span-4">
+                            <textarea
+                              rows={2}
+                              placeholder="Vehicle Specifications / Remarks (optional) — e.g. length, tonnage capacity, side height, open/closed"
+                              value={row.vehicleSpecs || ''}
+                              onChange={(e) => handleBulkRowChange(idx, 'vehicleSpecs', e.target.value)}
+                              className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-800 bg-transparent focus:ring-2 focus:ring-blue-500/20 resize-y"
                             />
                           </div>
                         </div>

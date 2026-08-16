@@ -1,11 +1,12 @@
 import { UserRole } from '../types';
 
-// Generate or get unique device identifier
+// Generate or get unique device identifier. This is a device fingerprint, NOT a
+// credential - it only tells the server WHICH device a session belongs to.
 export function getDeviceId(): string {
-  let id = localStorage.getItem('logibid_device_id');
+  let id = localStorage.getItem('fleexbid_device_id');
   if (!id) {
     id = 'dev_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    localStorage.setItem('logibid_device_id', id);
+    localStorage.setItem('fleexbid_device_id', id);
   }
   return id;
 }
@@ -25,12 +26,9 @@ class ApiClient {
     const headers = new Headers(options.headers || {});
     headers.set('Content-Type', 'application/json');
 
-    // Add Authorization header if token exists
-    const accessToken = localStorage.getItem('logibid_access_token');
-    if (accessToken) {
-      headers.set('Authorization', `Bearer ${accessToken}`);
-    }
-
+    // Auth is handled entirely by HttpOnly cookies (accessToken + refreshToken)
+    // which the browser attaches automatically. NO tokens are ever stored in
+    // localStorage, so an XSS attack cannot read or replay the session.
     const config: RequestInit = {
       ...options,
       headers,
@@ -54,42 +52,30 @@ class ApiClient {
       );
     }
 
-    // If unauthorized, attempt a silent token refresh once
+    // If unauthorized, attempt a silent cookie-based token refresh once
     if (response.status === 401 && path !== '/auth/refresh' && path !== '/auth/login-staff' && path !== '/auth/verify-otp') {
       const refreshed = await this.silentRefresh();
       if (refreshed) {
-        // Retry the original request with new token
-        const newAccessToken = localStorage.getItem('logibid_access_token');
-        if (newAccessToken) {
-          const retriedHeaders = new Headers(config.headers || {});
-          retriedHeaders.set('Authorization', `Bearer ${newAccessToken}`);
-          config.headers = retriedHeaders;
-        }
+        // Retry the original request - the refreshed cookies are attached
+        // automatically, no header manipulation needed.
         try {
           response = await fetch(url, config);
         } catch (retryErr: any) {
           throw new Error('Unable to connect to the backend server. Please check your network connection.');
         }
       } else {
-        // Clear locally stored user state, redirect to login
-        localStorage.removeItem('logibid_user');
-        localStorage.removeItem('logibid_access_token');
-        localStorage.removeItem('logibid_refresh_token');
-        if (window.location.pathname !== '/login') {
+        // Clear locally stored user state (tokens live only in HttpOnly cookies,
+        // which the server clears on logout / failed refresh).
+        localStorage.removeItem('fleexbid_user');
+        // The public landing page handles the unauthenticated state itself;
+        // only hard-redirect when a signed-in user's request was rejected.
+        if (path !== '/auth/me' && window.location.pathname !== '/login') {
           window.location.href = '/login';
         }
       }
     }
 
     const data = await response.json().catch(() => ({}));
-
-    // If response contains tokens, store them
-    if (data.accessToken) {
-      localStorage.setItem('logibid_access_token', data.accessToken);
-    }
-    if (data.refreshToken) {
-      localStorage.setItem('logibid_refresh_token', data.refreshToken);
-    }
 
     if (!response.ok) {
       throw new Error(data.error || data.details || 'Something went wrong with the request');
@@ -107,28 +93,17 @@ class ApiClient {
 
     this.refreshPromise = (async () => {
       try {
-        const deviceId = getDeviceId();
-        const storedRefreshToken = localStorage.getItem('logibid_refresh_token');
+        // The refresh endpoint reads the HttpOnly refreshToken cookie and
+        // rotates the session, setting fresh cookies in the response.
         const res = await fetch(`${this.baseUrl}/auth/refresh`, {
           method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'x-refresh-token': storedRefreshToken || ''
+          headers: {
+            'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ deviceId, refreshToken: storedRefreshToken }),
+          body: JSON.stringify({ deviceId: getDeviceId() }),
           credentials: 'include'
         });
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          if (data.accessToken) {
-            localStorage.setItem('logibid_access_token', data.accessToken);
-          }
-          if (data.refreshToken) {
-            localStorage.setItem('logibid_refresh_token', data.refreshToken);
-          }
-          return true;
-        }
-        return false;
+        return res.ok;
       } catch {
         return false;
       }

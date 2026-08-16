@@ -71,11 +71,11 @@ export default function Dashboard() {
             avgParticipation: 4.2
           });
 
-          // If super admin, fetch recent audit trails
+          // If super admin, fetch recent audit trails (newest-first, paginated)
           if (user?.role === 'SUPER_ADMIN') {
             try {
-              const logsData = await api.get('/logs/audit');
-              setRecentLogs((logsData.logs || []).slice(-5).reverse());
+              const logsData = await api.get('/logs/audit?limit=5');
+              setRecentLogs(logsData.logs || []);
             } catch {}
           }
         }
@@ -351,7 +351,7 @@ export default function Dashboard() {
                 Reverse Auction Rules
               </h3>
               <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                LogiBid uses a 100% confidential sealed bidding process.
+                FleexBid uses a 100% confidential sealed bidding process.
               </p>
               <ul className="text-xs text-slate-300 space-y-2 mt-4 font-mono">
                 <li className="flex items-start gap-2">

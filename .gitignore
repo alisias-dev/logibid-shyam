@@ -9,6 +9,9 @@ coverage/
 
 .vercel
 
+# Freebuff desktop tool state (internal DB, session logs) - never part of the app repo.
+.freebuff/
+
 # Legacy file-based database from the pre-Postgres era - dead code, never read
 # at runtime. Kept out of git so stale demo hashes/credentials are not shipped.
 db.json

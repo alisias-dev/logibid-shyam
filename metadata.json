@@ -1,5 +1,5 @@
 {
-  "name": "LogiBid",
+  "name": "FleexBid",
   "description": "Secure, enterprise-grade sealed reverse auction platform for logistics and transport bidding.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

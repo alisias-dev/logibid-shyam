@@ -32,7 +32,6 @@ export default function OnboardTransporters() {
   const [mobileNumber, setMobileNumber] = useState('');
   const [gstNumber, setGstNumber] = useState('');
   const [panNumber, setPanNumber] = useState('');
-  const [selectedVehicles, setSelectedVehicles] = useState<string[]>([]);
   const [status, setStatus] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
   const [password, setPassword] = useState('');
 
@@ -69,9 +68,6 @@ export default function OnboardTransporters() {
     }
   };
 
-  // Available vehicles standard list
-  const vehicleOptions = ['32 FT Trailer', '20 FT Container', '40 FT Container', '19 FT Open Truck'];
-
   useEffect(() => {
     loadTransporters();
     if (user?.role === 'SUPER_ADMIN' || user?.role === 'LOGISTICS') {
@@ -93,12 +89,13 @@ export default function OnboardTransporters() {
 
   async function loadAuditLogs() {
     try {
-      const data = await api.get('/logs/audit');
+      // Newest-first, paginated (large limit so client-side filtering sees enough history)
+      const data = await api.get('/logs/audit?limit=500');
       // Filter logs only related to transporter onboarding or modifications
       const transLogs = (data.logs || []).filter((l: any) => 
         l.action.includes('TRANSPORTER') || l.action.includes('ONBOARD')
       );
-      setAuditLogs(transLogs.reverse());
+      setAuditLogs(transLogs);
     } catch {}
   }
 
@@ -115,7 +112,6 @@ export default function OnboardTransporters() {
     setMobileNumber('');
     setGstNumber('');
     setPanNumber('');
-    setSelectedVehicles([]);
     setStatus('ACTIVE');
     setPassword('');
     setError(null);
@@ -131,7 +127,6 @@ export default function OnboardTransporters() {
     setMobileNumber(tr.mobileNumber);
     setGstNumber(tr.gstNumber);
     setPanNumber(tr.panNumber);
-    setSelectedVehicles(tr.vehicleTypes || []);
     setStatus(tr.status);
     setPassword('');
     setError(null);
@@ -179,7 +174,6 @@ export default function OnboardTransporters() {
       mobileNumber: formattedPhone,
       gstNumber: gstNumber.toUpperCase(),
       panNumber: panNumber.toUpperCase(),
-      vehicleTypes: selectedVehicles,
       status
     };
 
@@ -207,12 +201,6 @@ export default function OnboardTransporters() {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const toggleVehicle = (v: string) => {
-    setSelectedVehicles(prev => 
-      prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]
-    );
   };
 
   // Filter transporters
@@ -354,15 +342,6 @@ export default function OnboardTransporters() {
                   </div>
                 </div>
 
-                {tr.vehicleTypes?.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {tr.vehicleTypes.map((v: string) => (
-                      <span key={v} className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded text-[9px] font-semibold">
-                        {v}
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
             ))
           )}
@@ -552,34 +531,6 @@ export default function OnboardTransporters() {
                 )}
               </div>
 
-              {/* Vehicle Options Checkboxes */}
-              <div className="space-y-2 border-t border-slate-100 dark:border-slate-900 pt-4">
-                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Operating Vehicle Fleets</label>
-                <div className="grid grid-cols-2 gap-3">
-                  {vehicleOptions.map(veh => {
-                    const isChecked = selectedVehicles.includes(veh);
-                    return (
-                      <div 
-                        key={veh}
-                        onClick={() => toggleVehicle(veh)}
-                        className={`p-3 border rounded-xl flex items-center justify-between cursor-pointer select-none transition-all ${
-                          isChecked 
-                            ? 'border-blue-500 bg-blue-50/25 dark:bg-blue-950/20' 
-                            : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900/50'
-                        }`}
-                      >
-                        <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{veh}</span>
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          readOnly
-                          className="rounded text-blue-600 focus:ring-blue-500"
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </form>
 
             {/* Footer */}

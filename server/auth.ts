@@ -1,33 +1,21 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { generateId } from './db';
+import { generateId, invalidateReadCache } from './db';
 import { queryPool } from './db_pool';
 import { Session, UserRole } from '../src/types';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_logibid_key_2026_rfv_tgb';
+// Never fall back to a hardcoded secret: that would let anyone forge valid JWTs.
+// In production the app refuses to boot without JWT_SECRET (enforced in app.ts).
+// In development we generate an ephemeral random secret so tokens cannot be forged
+// with a publicly known key (sessions simply invalidate on server restart).
+const JWT_SECRET =
+  process.env.JWT_SECRET || crypto.randomBytes(48).toString('hex');
+if (!process.env.JWT_SECRET) {
+  console.warn('[auth] JWT_SECRET not set - using an ephemeral random secret. Sessions will not survive a restart. Set JWT_SECRET in production.');
+}
 const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY_DAYS = 90;
-
-// In-memory OTP store
-interface OtpState {
-  hashedOtp: string;
-  expiry: number;
-  attempts: number;
-  requestCount: number;
-  lastRequested: number;
-}
-export const otpStore = new Map<string, OtpState>();
-
-// Periodically clean up expired OTPs
-setInterval(() => {
-  const now = Date.now();
-  for (const [mobile, state] of otpStore.entries()) {
-    if (state.expiry < now) {
-      otpStore.delete(mobile);
-    }
-  }
-}, 60000);
 
 export interface TokenPayload {
   id: string;
@@ -37,15 +25,8 @@ export interface TokenPayload {
 }
 
 /**
- * Generate a cryptographically secure 6-digit OTP
- */
-export function generateOtp(): string {
-  const num = crypto.randomInt(100000, 999999);
-  return num.toString();
-}
-
-/**
- * Hash utility for OTPs & Refresh Tokens
+ * Hash utility for Refresh Tokens (SHA-256 - a refresh token is high-entropy
+ * random material, so a keyed HMAC is unnecessary; plain hashing is sufficient).
  */
 export function hashValue(val: string): string {
   return crypto.createHash('sha256').update(val).digest('hex');
@@ -53,9 +34,14 @@ export function hashValue(val: string): string {
 
 /**
  * JWT utilities
+ *
+ * Access tokens embed `jti` = the database session id they were issued for.
+ * The authenticate middleware requires the session row to still exist, so a
+ * token dies the instant its session is revoked (logout, device re-login,
+ * admin block) instead of lingering for the full 15-minute expiry.
  */
-export function signAccessToken(payload: TokenPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
+export function signAccessToken(payload: TokenPayload, jti?: string): string {
+  return jwt.sign({ ...payload, jti }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
 }
 
 export function signRefreshToken(payload: { id: string; role: UserRole; deviceId: string }): string {
@@ -105,9 +91,6 @@ export async function createSession(
   const expiryDate = new Date();
   expiryDate.setDate(expiryDate.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
 
-  const accessToken = signAccessToken(payload);
-  const refreshTokenJwt = signRefreshToken({ id: targetId, role, deviceId });
-
   const newSession: Session = {
     id: generateId('sess'),
     transporterId: role === 'TRANSPORTER' ? targetId : null,
@@ -122,6 +105,10 @@ export async function createSession(
     refreshToken: hashedRefreshToken,
     expiry: expiryDate.toISOString()
   };
+
+  // The access token is bound to THIS session via jti (see signAccessToken).
+  const accessToken = signAccessToken(payload, newSession.id);
+  const refreshTokenJwt = signRefreshToken({ id: targetId, role, deviceId });
 
   // Revoke any existing session for the SAME device to prevent duplicate leakage (using snake_case)
   await queryPool(
@@ -147,6 +134,10 @@ export async function createSession(
       newSession.expiry
     ]
   );
+
+  // Session rows changed - flush the read cache so the new session id (and the
+  // revoked old device session) are visible to authenticate() immediately.
+  invalidateReadCache();
 
   return {
     accessToken,
@@ -226,7 +217,9 @@ export async function rotateSession(
       }
     }
 
-    const accessToken = signAccessToken(tokenPayload);
+    // Keep the SAME session id in the rotated access token (jti binding), so
+    // the token continues to die if this session is ever revoked.
+    const accessToken = signAccessToken(tokenPayload, session.id);
     const newRefreshTokenJwt = signRefreshToken({ id: payload.id, role: payload.role, deviceId });
 
     // Update the rotated details (using snake_case)
@@ -234,6 +227,10 @@ export async function rotateSession(
       'UPDATE sessions SET refresh_token = $1, last_activity = $2, expiry = $3, browser = $4, os = $5, ip_address = $6 WHERE id = $7',
       [hashedNewRefreshToken, now.toISOString(), expiryDate.toISOString(), browser, os, ipAddress, session.id]
     );
+
+    // Session row updated (rotated) - flush the read cache so authenticate()
+    // sees the live session immediately.
+    invalidateReadCache();
 
     return {
       accessToken,
@@ -253,4 +250,7 @@ export async function revokeSession(deviceId: string, userIdOrTransporterId: str
     'DELETE FROM sessions WHERE device_id = $1 AND (transporter_id = $2 OR user_id = $2)',
     [deviceId, userIdOrTransporterId]
   );
+  // Session row deleted - flush the read cache so the revoked access token
+  // (jti-bound to this session) is rejected on the very next request.
+  invalidateReadCache();
 }

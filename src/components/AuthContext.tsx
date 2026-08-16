@@ -15,8 +15,6 @@ interface AuthContextType {
   loading: boolean;
   loginStaff: (email: string, password: string) => Promise<void>;
   loginTransporter: (email: string, password: string) => Promise<void>;
-  requestOtp?: (email: string, password: string) => Promise<void>;
-  verifyOtp?: (email: string, otp: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -60,17 +58,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const requestOtp = async (email: string, password: string) => {
-    return await api.post('/auth/request-otp', { email, password });
-  };
-
-  const verifyOtp = async (email: string, otp: string) => {
-    const data = await api.post('/auth/verify-otp', { email, otp });
-    if (data.user) {
-      setUser(data.user);
-    }
-  };
-
   const logout = async () => {
     try {
       const deviceId = getDeviceId();
@@ -79,16 +66,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Logout request failed', e);
     } finally {
       setUser(null);
-      // Clear cookies from browser perspective just in case
-      document.cookie = "accessToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-      document.cookie = "refreshToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-      localStorage.removeItem('logibid_access_token');
-      localStorage.removeItem('logibid_refresh_token');
+      // Tokens live in HttpOnly cookies which the SERVER clears on logout
+      // (JS cannot read or delete HttpOnly cookies). Only user metadata is
+      // cleared locally.
+      localStorage.removeItem('fleexbid_user');
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, loginStaff, loginTransporter, requestOtp, verifyOtp, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, loginStaff, loginTransporter, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

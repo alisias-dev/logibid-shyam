@@ -63,7 +63,7 @@ export default function AiAdvisor() {
 
   // Copilot States
   const [chatMessages, setChatMessages] = useState<Message[]>([
-    { role: 'assistant', content: "Hello! I am LogiBid AI Copilot. Ask me anything about freight requirements, transport routes, active bid rankings, or platform savings analytics!" }
+    { role: 'assistant', content: "Hello! I am FleexBid AI Copilot. Ask me anything about freight requirements, transport routes, active bid rankings, or platform savings analytics!" }
   ]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
@@ -73,7 +73,7 @@ export default function AiAdvisor() {
   const [routeInput, setRouteInput] = useState({
     pickup: 'Mumbai, MH',
     delivery: 'Delhi, NCR',
-    vehicleType: '32 FT Trailer',
+    vehicleType: 'TRUCK',
     weight: 18,
     material: 'Steel Coils'
   });
@@ -247,7 +247,7 @@ export default function AiAdvisor() {
             <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
               <Sparkles className="w-5 h-5 animate-pulse" />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">LogiBid AI Advisor</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">FleexBid AI Advisor</h1>
           </div>
           <p className="text-sm text-slate-500 dark:text-slate-400">
             Automate logistics rate intelligence, supplier profiling, and procurement strategy with Gemini 3.5.
@@ -299,7 +299,7 @@ export default function AiAdvisor() {
                   <span>Interactive Guide</span>
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Ask LogiBid AI Copilot anything about freight negotiations, carrier coverage, active requirements, or total cost savings.
+                  Ask FleexBid AI Copilot anything about freight negotiations, carrier coverage, active requirements, or total cost savings.
                 </p>
                 <div className="pt-2 space-y-2 border-t border-slate-100 dark:border-slate-900">
                   <span className="text-[10px] font-mono text-slate-400 block uppercase">Suggested Prompts</span>
@@ -333,7 +333,7 @@ export default function AiAdvisor() {
                   </div>
                 </div>
                 <button 
-                  onClick={() => setChatMessages([{ role: 'assistant', content: "Hello! I am LogiBid AI Copilot. Ask me anything about freight requirements, transport routes, active bid rankings, or platform savings analytics!" }])}
+                  onClick={() => setChatMessages([{ role: 'assistant', content: "Hello! I am FleexBid AI Copilot. Ask me anything about freight requirements, transport routes, active bid rankings, or platform savings analytics!" }])}
                   className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-900 rounded text-slate-400 dark:text-slate-500 hover:text-slate-700 transition-colors"
                   title="Clear conversation"
                 >
@@ -477,10 +477,11 @@ export default function AiAdvisor() {
                         onChange={(e) => setRouteInput(prev => ({ ...prev, vehicleType: e.target.value }))}
                         className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg pl-9 pr-4 py-2 text-sm outline-none focus:border-blue-500 transition-colors text-slate-800 dark:text-slate-100"
                       >
-                        <option value="32 FT Trailer">32 FT Trailer</option>
-                        <option value="20 FT Container">20 FT Container</option>
-                        <option value="40 FT Container">40 FT Container</option>
-                        <option value="19 FT Open Truck">19 FT Open Truck</option>
+                        <option value="TRUCK">TRUCK</option>
+                        <option value="DUMPER">DUMPER</option>
+                        <option value="TRAILER">TRAILER</option>
+                        <option value="CONTAINER BODY">CONTAINER BODY</option>
+                        <option value="OTHER">OTHER</option>
                       </select>
                     </div>
                   </div>

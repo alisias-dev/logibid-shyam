@@ -1,8 +1,22 @@
 import express from 'express';
 import { GoogleGenAI, Type } from '@google/genai';
 import { queryPool } from './db_pool';
+import { UserRole } from '../src/types';
 
 const router = express.Router();
+
+/**
+ * Role guard for AI endpoints. The router is mounted behind `authenticate`,
+ * so req.user is always present; this enforces the second half of RBAC.
+ */
+function authorizeRoles(roles: UserRole[]) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions' });
+    }
+    next();
+  };
+}
 
 /**
  * Validation middleware ensuring GEMINI_API_KEY is present
@@ -103,9 +117,9 @@ router.post('/chat', async (req, res) => {
       parts: [{ text: m.content }],
     }));
 
-    const systemInstruction = `You are LogiBid Copilot, an expert enterprise logistics AI advisor. 
+    const systemInstruction = `You are FleexBid Copilot, an expert enterprise logistics AI advisor. 
 You help logistics managers and transporters negotiate, predict market rates, match trucks, and optimize procurement.
-Here is the real-time context of the LogiBid platform:
+Here is the real-time context of the FleexBid platform:
 - Onboarded Active Transporters: ${stats.transporterCount}
 - Total Freight Requirements: ${stats.requirementsCount} (${stats.activeReqs} currently LIVE and bidding)
 - Total Procured/Awarded Requirements: ${stats.awardedReqs}
@@ -222,7 +236,7 @@ Analyze historical and realistic Indian logistics parameters to supply pricing g
  * POST /api/ai/match-transporters
  * Suggest matching transporters based on operational profile
  */
-router.post('/match-transporters', async (req, res) => {
+router.post('/match-transporters', authorizeRoles(['SUPER_ADMIN', 'LOGISTICS']), async (req, res) => {
   const { requirementId } = req.body;
 
   if (!requirementId) {
@@ -315,7 +329,7 @@ Produce a ranked matching list. Each match must contain a percentage match score
  * POST /api/ai/negotiator
  * Draft supplier negotiation messaging templates
  */
-router.post('/negotiator', async (req, res) => {
+router.post('/negotiator', authorizeRoles(['SUPER_ADMIN', 'LOGISTICS']), async (req, res) => {
   const { requirementId } = req.body;
 
   if (!requirementId) {

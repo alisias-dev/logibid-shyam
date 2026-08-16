@@ -3,8 +3,6 @@ import { generateId } from './db';
 import { queryPool } from './db_pool';
 import { Requirement, Transporter } from '../src/types';
 
-let cachedTestAccount: any = null;
-
 export interface EmailLog {
   id: string;
   to: string;
@@ -140,7 +138,7 @@ export async function sendEmail(to: string, subject: string, body: string): Prom
       });
 
       const info = await transporter.sendMail({
-        from: `LogiBid Secure Gateway <${smtpUser}>`,
+        from: `FleexBid Secure Gateway <${smtpUser}>`,
         to,
         subject,
         html: body,
@@ -294,119 +292,6 @@ export async function sendWhatsApp(to: string, template: string, params: any): P
 }
 
 /**
- * Send OTP SMS
- */
-export async function sendOtpSms(mobileNumber: string, otp: string): Promise<boolean> {
-  const message = `[LogiBid Secure Portal] Your OTP is ${otp}. Valid for 5 minutes. Do not share this with anyone.`;
-  return sendSms(mobileNumber, message);
-}
-
-/**
- * Send OTP Email
- */
-export async function sendOtpEmail(email: string, otp: string): Promise<EmailSendResult> {
-  const subject = "LogiBid Secure Gateway - Your Login OTP Code";
-  const body = `
-    <div style="font-family: sans-serif; padding: 24px; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px;">
-      <h2 style="color: #2563eb; margin-bottom: 16px;">LogiBid Secure Access</h2>
-      <p style="font-size: 14px; color: #334155;">You have requested a secure verification code to sign into your Transporter account.</p>
-      <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; text-align: center; margin: 24px 0; border: 1px solid #f1f5f9;">
-        <span style="font-family: monospace; font-size: 32px; font-weight: bold; letter-spacing: 0.1em; color: #0f172a;">${otp}</span>
-      </div>
-      <p style="font-size: 12px; color: #64748b; line-height: 1.5;">This code will expire in 5 minutes. If you did not initiate this request, please notify your Logistics Supervisor immediately.</p>
-    </div>
-  `;
-  return sendEmail(email, subject, body);
-}
-
-/**
- * Force sends a transporter OTP via SMTP (Nodemailer) with no mock fallback
- */
-export async function sendTransporterSmtpOtp(email: string, otp: string): Promise<boolean> {
-  let smtpUser = process.env.SMTP_USER;
-  let smtpPass = process.env.SMTP_PASS;
-  let smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-  let smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-  let isTestAccount = false;
-
-  if (!smtpUser || !smtpPass) {
-    console.log('[SMTP WARNING] No real SMTP credentials configured. Generating a secure Ethereal SMTP test account...');
-    try {
-      if (!cachedTestAccount) {
-        cachedTestAccount = await nodemailer.createTestAccount();
-      }
-      smtpUser = cachedTestAccount.user;
-      smtpPass = cachedTestAccount.pass;
-      smtpHost = cachedTestAccount.smtp.host;
-      smtpPort = cachedTestAccount.smtp.port;
-      isTestAccount = true;
-    } catch (err: any) {
-      throw new Error(`Failed to generate dynamic SMTP test credentials: ${err.message}`);
-    }
-  }
-
-  const logId = generateId('emaillog');
-  const now = new Date().toISOString();
-  const subject = "LogiBid Secure Gateway - Your Login OTP Code";
-  const body = `
-    <div style="font-family: sans-serif; padding: 24px; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px;">
-      <h2 style="color: #2563eb; margin-bottom: 16px;">LogiBid Secure Access</h2>
-      <p style="font-size: 14px; color: #334155;">You have requested a secure verification code to sign into your Transporter account.</p>
-      <div style="background-color: #f8fafc; padding: 16px; border-radius: 8px; text-align: center; margin: 24px 0; border: 1px solid #f1f5f9;">
-        <span style="font-family: monospace; font-size: 32px; font-weight: bold; letter-spacing: 0.1em; color: #0f172a;">${otp}</span>
-      </div>
-      <p style="font-size: 12px; color: #64748b; line-height: 1.5;">This code will expire in 5 minutes. If you did not initiate this request, please notify your Logistics Supervisor immediately.</p>
-    </div>
-  `;
-
-  try {
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: {
-        user: smtpUser,
-        pass: smtpPass,
-      },
-    });
-
-    const info = await transporter.sendMail({
-      from: isTestAccount ? `"LogiBid Sandbox" <${smtpUser}>` : `LogiBid Secure Gateway <${smtpUser}>`,
-      to: email,
-      subject,
-      html: body,
-    });
-
-    if (isTestAccount) {
-      const previewUrl = nodemailer.getTestMessageUrl(info);
-      console.log(`[SMTP DISPATCH SUCCESS (ETHEREAL)] To: ${email} | Preview URL: ${previewUrl} | OTP: ${otp}`);
-    } else {
-      console.log(`[REAL SMTP PORTAL DISPATCH SUCCESS] To: ${email} | MessageId: ${info.messageId}`);
-    }
-    
-    // Save to logs (using sent_at)
-    await queryPool(
-      'INSERT INTO email_logs (id, "to", subject, body, sent_at, status, error, provider) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-      [logId, email, subject, body, now, 'SENT', isTestAccount ? 'Sent via dynamic Ethereal SMTP test account' : null, 'smtp']
-    );
-
-    return true;
-  } catch (error: any) {
-    console.error(`[REAL SMTP PORTAL DISPATCH FAILED] To: ${email} | Error: ${error.message}`);
-    
-    // Save to logs with FAILED status (using sent_at)
-    try {
-      await queryPool(
-        'INSERT INTO email_logs (id, "to", subject, body, sent_at, status, error, provider) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [logId, email, subject, body, now, 'FAILED', error.message, 'smtp']
-      );
-    } catch (e) {}
-
-    throw new Error(`SMTP Gateway delivery failed: ${error.message}`);
-  }
-}
-
-/**
  * Trigger All-Channel Notification on requirement publish
  */
 export async function notifyPublishedRequirement(req: Requirement, tr: Transporter, appUrl: string) {
@@ -427,7 +312,8 @@ export async function notifyPublishedRequirement(req: Requirement, tr: Transport
   await sendWhatsApp(tr.mobileNumber, 'new_requirement_invite', waParams);
 
   // 2. SMS
-  const smsMessage = `LogiBid: New bid Mumbai to Delhi (${req.vehicleType}). Closes ${closingT} on ${pickupD}. Link: ${deepLink}`;
+  const specsSnippet = req.vehicleSpecs ? ` Vehicle specs: ${req.vehicleSpecs.slice(0, 100)}${req.vehicleSpecs.length > 100 ? '...' : ''}.` : '';
+  const smsMessage = `FleexBid: New bid Mumbai to Delhi (${req.vehicleType}). Closes ${closingT} on ${pickupD}.${specsSnippet} Link: ${deepLink}`;
   await sendSms(tr.mobileNumber, smsMessage);
 
   // 3. Email
@@ -441,6 +327,7 @@ export async function notifyPublishedRequirement(req: Requirement, tr: Transport
         <tr><td style="padding: 8px; font-weight: bold;">Route:</td><td style="padding: 8px;">${req.pickupLocation} &rarr; ${req.deliveryLocation}</td></tr>
         <tr style="background-color: #f3f4f6;"><td style="padding: 8px; font-weight: bold;">Vehicle Type:</td><td style="padding: 8px;">${req.vehicleType}</td></tr>
         <tr><td style="padding: 8px; font-weight: bold;">Material / Weight:</td><td style="padding: 8px;">${req.material} (${req.weight} Tons)</td></tr>
+        ${req.vehicleSpecs ? `<tr style="background-color: #fef3c7;"><td style="padding: 8px; font-weight: bold;">Vehicle Specifications / Remarks:</td><td style="padding: 8px;">${req.vehicleSpecs}</td></tr>` : ''}
         <tr style="background-color: #f3f4f6;"><td style="padding: 8px; font-weight: bold;">Pickup Date:</td><td style="padding: 8px;">${pickupD}</td></tr>
         <tr><td style="padding: 8px; font-weight: bold;">Bid Closing Time:</td><td style="padding: 8px; color: #dc2626; font-weight: bold;">${closingT} (${new Date(req.bidClosingTime).toLocaleDateString()})</td></tr>
       </table>
@@ -470,7 +357,7 @@ export async function notifyAwardedBid(req: Requirement, tr: Transporter, amount
   await sendWhatsApp(tr.mobileNumber, 'bid_awarded', waParams);
 
   // 2. SMS
-  const smsMessage = `Congratulations! LogiBid ${req.id} (${req.pickupLocation} to ${req.deliveryLocation}) has been awarded to you at ₹${amount.toLocaleString()}. Details: ${portalLink}`;
+  const smsMessage = `Congratulations! FleexBid ${req.id} (${req.pickupLocation} to ${req.deliveryLocation}) has been awarded to you at ₹${amount.toLocaleString()}. Details: ${portalLink}`;
   await sendSms(tr.mobileNumber, smsMessage);
 
   // 3. Email

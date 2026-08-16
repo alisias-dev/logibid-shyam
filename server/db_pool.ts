@@ -22,14 +22,35 @@ export function getDbPool(): pg.Pool {
       isProduction
     );
 
+    // Loud operational warning: a DIRECT Neon endpoint (no -pooler) means every
+    // warm lambda holds up to `max` PHYSICAL Postgres connections. Under a burst
+    // of cold starts that multiplies toward Neon's max_connections limit. The
+    // pooled endpoint (-pooler hostname) routes through PgBouncer so these
+    // client connections multiplex onto a handful of physical ones - the
+    // 100+ concurrent user fix. The code is fully pooled-compatible; this just
+    // tells ops the switch hasn't been made yet. Verify via GET /api/db-verify.
+    if (isProduction && connectionString && connectionString.includes('neon.tech') && !connectionString.includes('-pooler')) {
+      console.warn('[POOL] DATABASE_URL is a DIRECT Neon endpoint (hostname lacks "-pooler"). Switch to the pooled endpoint string in Vercel to support 100+ concurrent users without exhausting connections.');
+    }
+
     poolInstance = new pg.Pool({
-      connectionString: connectionString || 'postgresql://localhost:5432/logibid',
+      connectionString: connectionString || 'postgresql://localhost:5432/fleexbid',
       ssl: needsSsl ? { rejectUnauthorized: false } : false,
-      // Optimized pooling for serverless and production environments
-      max: isProduction ? 10 : 50,
+      // Optimized pooling for serverless and production environments.
+      // IMPORTANT: DATABASE_URL must be the POOLED Neon endpoint (hostname ends
+      // with "-pooler") so PgBouncer multiplexes these client connections onto a
+      // small number of physical Postgres connections. With the pooled endpoint,
+      // 15 client connections per lambda instance is safe headroom for 100+
+      // concurrent users without exhausting Neon's max_connections.
+      max: isProduction ? 15 : 50,
       min: isProduction ? 0 : 2,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
+      // Recycle connections periodically so stale backends are dropped after
+      // Neon compute restarts / autoscaling events.
+      maxUses: 400,
+      // Identify this app's backends on the Neon dashboard / pg_stat_activity.
+      application_name: 'fleexbid'
     });
 
     poolInstance.on('error', (err) => {
@@ -64,6 +85,7 @@ function normalizeKeys(row: any): any {
     pickupdate: 'pickupDate',
     expecteddelivery: 'expectedDelivery',
     specialinstructions: 'specialInstructions',
+    vehiclespecs: 'vehicleSpecs',
     bidopeningtime: 'bidOpeningTime',
     bidclosingtime: 'bidClosingTime',
     targetrate: 'targetRate',
@@ -124,6 +146,7 @@ function normalizeKeys(row: any): any {
     pickup_date: 'pickupDate',
     expected_delivery: 'expectedDelivery',
     special_instructions: 'specialInstructions',
+    vehicle_specs: 'vehicleSpecs',
     bid_opening_time: 'bidOpeningTime',
     bid_closing_time: 'bidClosingTime',
     target_rate: 'targetRate',
@@ -191,5 +214,79 @@ export async function queryPool(text: string, params?: any[]) {
   } catch (error) {
     console.error(`PostgreSQL query error: ${text}`, error);
     throw error;
+  }
+}
+
+/**
+ * Run a query on a specific client (inside a transaction) with the same
+ * camelCase key normalization as queryPool. Used by writeDB so that every
+ * read and write of a transaction goes through ONE connection - required for
+ * atomic multi-table writes, rollback, and snapshot isolation.
+ */
+export async function queryClient(client: pg.PoolClient, text: string, params?: any[]) {
+  const res = await client.query(text, params);
+  if (res && res.rows) {
+    res.rows = res.rows.map(normalizeKeys);
+  }
+  return res;
+}
+
+/**
+ * Diagnostics for operations tooling: live pool utilization + resolved
+ * connection settings. Exposes NO credentials - only config/host metadata.
+ */
+export function getPoolInfo() {
+  const pool = getDbPool();
+  const url = process.env.DATABASE_URL || '';
+  let host = 'unknown';
+  let port: string | null = null;
+  const match = url.match(/@([^:/?#]+)(?::(\d+))?/);
+  if (match) {
+    host = match[1];
+    port = match[2] || null;
+  }
+  return {
+    host,
+    port,
+    pooledHostname: host.includes('-pooler'),
+    ssl: !!pool.options.ssl,
+    max: pool.options.max,
+    connectionTimeoutMillis: pool.options.connectionTimeoutMillis,
+    idleTimeoutMillis: pool.options.idleTimeoutMillis,
+    totalCount: pool.totalCount,
+    idleCount: pool.idleCount,
+    waitingCount: pool.waitingCount,
+  };
+}
+
+// NOTE: session-level advisory locks (pg_advisory_lock / pg_advisory_unlock)
+// are intentionally NOT provided. Neon's pooled endpoint runs PgBouncer in
+// transaction mode (pool_mode=transaction), where a session lock's owning
+// "session" is returned to the pool after each statement's transaction - so
+// session locks silently provide NO mutual exclusion. All cross-instance
+// serialization must use TRANSACTION-scoped locks (pg_advisory_xact_lock)
+// inside a real BEGIN/COMMIT transaction (see writeDB in server/db.ts).
+
+/**
+ * Run a callback inside a single database transaction on one dedicated client.
+ */
+export async function withTransaction<T>(
+  fn: (client: pg.PoolClient) => Promise<T>
+): Promise<T> {
+  const client = await getDbPool().connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // connection may be broken; nothing to roll back
+    }
+    throw error;
+  } finally {
+    client.release();
   }
 }
