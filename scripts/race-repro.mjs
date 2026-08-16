@@ -3,7 +3,7 @@
 const BASE = process.env.BASE_URL || 'https://www.fleexbid.live';
 const ADMIN = {
   email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-  password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+  password: process.env.ADMIN_PASSWORD,
   deviceId: 'race-repro'
 };
 const cry = await import('node:crypto');
@@ -20,13 +20,13 @@ const tr = await (await call('/api/transporters', 'POST', {
   companyName: 'Race QA', contactPerson: 'QA',
   email: 'race.' + tag + '@fleexbid.test',
   mobileNumber: '+919912345678', gstNumber: '27AAAAA1111A1Z1', panNumber: 'AAAAA1111A',
-  vehicleTypes: ['32 FT Trailer'], operatingStates: ['Maharashtra'],
+  vehicleTypes: ['TRAILER'], operatingStates: ['Maharashtra'],
   preferredRoutes: ['Mumbai -> Delhi'], password: 'RacePass!2026'
 }, adminJar)).json();
 const req = await (await call('/api/requirements', 'POST', {
   requirements: [{
     pickupLocation: 'Race City', deliveryLocation: 'Race Town', material: 'Race', weight: 10,
-    vehicleType: '32 FT Trailer', pickupDate: '2026-09-01',
+    vehicleType: 'TRAILER', pickupDate: '2026-09-01',
     bidClosingTime: new Date(Date.now() + 15 * 60000).toISOString(),
     awardType: 'MANUAL', eligibleTransporters: [tr.transporter.id]
   }]

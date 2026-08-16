@@ -23,7 +23,7 @@ try {
   // Login as admin, create a disposable transporter.
   let r = await call('/api/auth/login-staff', 'POST', {
     email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-    password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+    password: process.env.ADMIN_PASSWORD,
     deviceId: 'phase3-admin'
   }, adminJar);
   check('admin login', r.status === 200, (await r.json()).error || '');
@@ -32,7 +32,7 @@ try {
     companyName: 'RL-Test-' + tag, contactPerson: 'QA',
     email: `rl-${tag}@example.com`, mobileNumber: '+919888888888',
     gstNumber: '27ABCDE1234F1Z5', panNumber: 'ABCDE1234F',
-    vehicleTypes: ['32 FT Trailer'], operatingStates: ['Maharashtra'], preferredRoutes: [],
+    vehicleTypes: ['TRAILER'], operatingStates: ['Maharashtra'], preferredRoutes: [],
     password: 'Phase3Pass!2026'
   }, adminJar);
   tr = (await r.json()).transporter;

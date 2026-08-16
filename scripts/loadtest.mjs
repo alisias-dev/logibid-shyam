@@ -13,7 +13,7 @@ const N = parseInt(process.env.LOAD_USERS || '110', 10);
 const BATCH = 19; // stay under the 20/15min login bucket per batch
 const ADMIN = {
   email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-  password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+  password: process.env.ADMIN_PASSWORD,
   deviceId: 'loadtest-admin'
 };
 const TPASS = 'LoadPass!2026';
@@ -54,7 +54,7 @@ try {
         email,
         mobileNumber: '+91' + (mobileBase + i),
         gstNumber: '27AAAAA1111A1Z1', panNumber: 'AAAAA1111A',
-        vehicleTypes: ['32 FT Trailer'], operatingStates: ['Maharashtra'],
+        vehicleTypes: ['TRAILER'], operatingStates: ['Maharashtra'],
         preferredRoutes: ['Mumbai -> Delhi'], password: TPASS
       }, adminJar).then(async (rr) => {
         const b = await rr.json();
@@ -73,7 +73,7 @@ try {
   r = await call('/api/requirements', 'POST', {
     requirements: [{
       pickupLocation: 'Load City', deliveryLocation: 'Load Town', material: 'Load Material', weight: 10,
-      vehicleType: '32 FT Trailer', pickupDate: '2026-09-01', bidClosingTime: closing,
+      vehicleType: 'TRAILER', pickupDate: '2026-09-01', bidClosingTime: closing,
       awardType: 'AUTOMATIC',
       eligibleTransporters: created.transporters.map(t => t.id)
     }]

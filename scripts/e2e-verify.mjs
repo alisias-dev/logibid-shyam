@@ -4,7 +4,7 @@
 const BASE = process.env.BASE_URL || 'https://www.fleexbid.live';
 const ADMIN = {
   email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-  password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+  password: process.env.ADMIN_PASSWORD,
   deviceId: 'e2e-suite'
 };
 
@@ -30,7 +30,7 @@ try {
       companyName: name, contactPerson: 'QA Tester',
       email: 'qa.' + tag + '.' + name + '@fleexbid.test',
       mobileNumber: '+919900000000', gstNumber: '27AAAAA1111A1Z1', panNumber: 'AAAAA1111A',
-      vehicleTypes: ['32 FT Trailer'], operatingStates: ['Maharashtra'],
+      vehicleTypes: ['TRAILER'], operatingStates: ['Maharashtra'],
       preferredRoutes: ['Mumbai -> Delhi'], password: 'QaPass!2026'
     }, adminJar);
     const b = await r.json();
@@ -45,7 +45,7 @@ try {
   r = await call('/api/requirements', 'POST', {
     requirements: [{
       pickupLocation: 'QA City', deliveryLocation: 'QA Town', material: 'QA Material', weight: 10,
-      vehicleType: '32 FT Trailer', pickupDate: '2026-09-01', bidClosingTime: closing,
+      vehicleType: 'TRAILER', pickupDate: '2026-09-01', bidClosingTime: closing,
       awardType: 'MANUAL', eligibleTransporters: [created.transporterA.id, created.transporterB.id]
     }]
   }, adminJar);
@@ -97,7 +97,7 @@ try {
   const sp = await (await call('/api/auth/login-staff', 'POST', { email: created.spectator.email, password: 'Spectator#2026', deviceId: 'qa-sp' }, spJar)).json();
   check('spectator login', !!sp.success);
   r = await call('/api/requirements', 'POST', {
-    requirements: [{ pickupLocation: 'X', deliveryLocation: 'Y', material: 'Z', weight: 1, vehicleType: '32 FT Trailer', pickupDate: '2026-09-01', bidClosingTime: new Date(Date.now() + 60000).toISOString() }]
+    requirements: [{ pickupLocation: 'X', deliveryLocation: 'Y', material: 'Z', weight: 1, vehicleType: 'TRAILER', pickupDate: '2026-09-01', bidClosingTime: new Date(Date.now() + 60000).toISOString() }]
   }, spJar);
   check('spectator mutation blocked (403)', r.status === 403, (await r.json()).error || r.status);
 

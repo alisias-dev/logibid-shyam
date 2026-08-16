@@ -244,6 +244,18 @@ class BidValidationError extends Error {
   }
 }
 
+/**
+ * Thrown inside the serialized award updater when the requirement has ALREADY
+ * been awarded by a concurrent/retried request. The handler maps it to a 409
+ * so a client retry cannot create a duplicate award row.
+ */
+class AwardConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AwardConflictError';
+  }
+}
+
 // Advisory-lock key for the auction auto-close pass (must match across instances)
 
 /**
@@ -1554,10 +1566,12 @@ app.post('/api/requirements', authenticate, authorize(['SUPER_ADMIN', 'LOGISTICS
 
     await writeDB(dbStore => {
       requirements.forEach((r) => {
-        // Find maximum existing serial to guarantee uniqueness
+        // Find maximum existing serial across ALL years to guarantee
+        // uniqueness (a year-hardcoded regex would re-emit TR-2026-0001
+        // after the calendar rolls over and collide on the primary key).
         let maxSerial = 0;
         dbStore.requirements.forEach(existing => {
-          const match = existing.id.match(/^TR-2026-(\d+)$/);
+          const match = existing.id.match(/^TR-\d{4}-(\d+)$/);
           if (match) {
             const num = parseInt(match[1], 10);
             if (num > maxSerial) {
@@ -1565,7 +1579,8 @@ app.post('/api/requirements', authenticate, authorize(['SUPER_ADMIN', 'LOGISTICS
             }
           }
         });
-        const reqId = `TR-2026-${String(maxSerial + 1).padStart(4, '0')}`;
+        const year = new Date().getFullYear();
+        const reqId = `TR-${year}-${String(maxSerial + 1).padStart(4, '0')}`;
 
         const targetedTransporters: string[] = r.eligibleTransporters || r.targeted_transporter_ids || [];
 
@@ -2147,9 +2162,16 @@ app.post('/api/requirements/:id/award', authenticate, authorize(['SUPER_ADMIN', 
     const awardId = generateId('award');
 
     await writeDB(dbStore => {
-      // Find and update requirement status
+      // Exactly-once guard: re-check the FRESH committed state inside the
+      // serialized transaction. A retried or racing award request sees the
+      // status already AWARDED (or an existing award row) and rolls back
+      // instead of creating a duplicate award.
       const target = dbStore.requirements.find(r => r.id === id);
-      if (target) target.status = 'AWARDED';
+      if (!target) throw new AwardConflictError('Requirement not found');
+      if (target.status === 'AWARDED' || dbStore.awards.some(a => a.requirementId === id)) {
+        throw new AwardConflictError('This requirement has already been awarded');
+      }
+      target.status = 'AWARDED';
 
       dbStore.awards.push({
         id: awardId,
@@ -2196,6 +2218,9 @@ app.post('/api/requirements/:id/award', authenticate, authorize(['SUPER_ADMIN', 
 
     return res.json({ success: true, message: 'Contract awarded and notifications dispatched' });
   } catch (error) {
+    if (error instanceof AwardConflictError) {
+      return res.status(409).json({ error: error.message });
+    }
     return res.status(500).json({ error: 'Failed to award contract' });
   }
 });
@@ -2412,10 +2437,12 @@ app.post('/api/v1/requirements', authenticate, authorize(['SUPER_ADMIN', 'LOGIST
 
     await writeDB(dbStore => {
       reqsInput.forEach((r) => {
-        // Find maximum existing serial to guarantee uniqueness
+        // Find maximum existing serial across ALL years to guarantee
+        // uniqueness (a year-hardcoded regex would re-emit TR-2026-0001
+        // after the calendar rolls over and collide on the primary key).
         let maxSerial = 0;
         dbStore.requirements.forEach(existing => {
-          const match = existing.id.match(/^TR-2026-(\d+)$/);
+          const match = existing.id.match(/^TR-\d{4}-(\d+)$/);
           if (match) {
             const num = parseInt(match[1], 10);
             if (num > maxSerial) {
@@ -2423,7 +2450,8 @@ app.post('/api/v1/requirements', authenticate, authorize(['SUPER_ADMIN', 'LOGIST
             }
           }
         });
-        const reqId = `TR-2026-${String(maxSerial + 1).padStart(4, '0')}`;
+        const year = new Date().getFullYear();
+        const reqId = `TR-${year}-${String(maxSerial + 1).padStart(4, '0')}`;
 
         const closingDate = r.bidClosingTime 
           ? new Date(r.bidClosingTime).toISOString() 

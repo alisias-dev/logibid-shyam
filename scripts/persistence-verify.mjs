@@ -4,7 +4,7 @@
 const BASE = process.env.BASE_URL || 'https://www.fleexbid.live';
 const ADMIN = {
   email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-  password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+  password: process.env.ADMIN_PASSWORD,
   deviceId: 'persist-audit'
 };
 import { makeJar, makeCall } from './lib/cookies.mjs';
@@ -43,7 +43,7 @@ try {
     email: 'persist.' + tag + '@fleexbid.test',
     mobileNumber: '+91991' + (100000 + Math.floor(Math.random() * 899999)),
     gstNumber: '27AAAAA1111A1Z1', panNumber: 'AAAAA1111A',
-    vehicleTypes: ['32 FT Trailer'], operatingStates: ['Maharashtra'],
+    vehicleTypes: ['TRAILER'], operatingStates: ['Maharashtra'],
     preferredRoutes: ['Mumbai -> Delhi'], password: 'PersistPass!2026'
   }, adminJar);
   d = await r.json();
@@ -56,7 +56,7 @@ try {
   r = await call('/api/requirements', 'POST', {
     requirements: [{
       pickupLocation: 'Persist City', deliveryLocation: 'Persist Town', material: 'Persist Material', weight: 10,
-      vehicleType: '32 FT Trailer', pickupDate: '2026-09-01', bidClosingTime: closing,
+      vehicleType: 'TRAILER', pickupDate: '2026-09-01', bidClosingTime: closing,
       awardType: 'AUTOMATIC',
       eligibleTransporters: [transporter.id]
     }]

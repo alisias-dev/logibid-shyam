@@ -6,7 +6,7 @@
 const BASE = process.env.BASE_URL || 'https://www.fleexbid.live';
 const ADMIN = {
   email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-  password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+  password: process.env.ADMIN_PASSWORD,
   deviceId: 'phase2-suite'
 };
 
@@ -43,7 +43,7 @@ try {
     const res = await call('/api/requirements', 'POST', {
       requirements: [{
         pickupLocation: 'P2', deliveryLocation: 'D2', material: 'M2', weight: 10,
-        vehicleType: '32 FT Trailer', pickupDate: '2026-09-01',
+        vehicleType: 'TRAILER', pickupDate: '2026-09-01',
         bidClosingTime: new Date(Date.now() + 30 * 60000).toISOString(),
         awardType: 'MANUAL'
       }]
@@ -59,7 +59,7 @@ try {
       companyName: 'P2-' + cry.randomBytes(2).toString('hex'), contactPerson: 'QA',
       email: `p2-${cry.randomBytes(4).toString('hex')}@example.com`, mobileNumber: '+919999999999',
       gstNumber: '27ABCDE1234F1Z5', panNumber: 'ABCDE1234F',
-      vehicleTypes: ['32 FT Trailer'], operatingStates: ['Maharashtra'], preferredRoutes: [], password: 'Phase2Pass!2026'
+      vehicleTypes: ['TRAILER'], operatingStates: ['Maharashtra'], preferredRoutes: [], password: 'Phase2Pass!2026'
     }, adminJar);
     return (await res.json()).transporter;
   };

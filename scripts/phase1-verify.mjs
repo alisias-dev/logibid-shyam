@@ -2,7 +2,7 @@
 const BASE = process.env.BASE_URL || 'https://www.fleexbid.live';
 const ADMIN = {
   email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-  password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+  password: process.env.ADMIN_PASSWORD,
   deviceId: 'phase1-verify'
 };
 import { makeJar, makeCall } from './lib/cookies.mjs';

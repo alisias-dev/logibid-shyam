@@ -4,7 +4,7 @@
 const BASE = process.env.BASE_URL || 'https://www.fleexbid.live';
 const ADMIN = {
   email: process.env.ADMIN_EMAIL || 'aronkumar.logistics@gmail.com',
-  password: process.env.ADMIN_PASSWORD || 'Fleex!fAijOPGVpiYH',
+  password: process.env.ADMIN_PASSWORD,
   deviceId: 'conc-suite'
 };
 const results = [];
@@ -31,7 +31,7 @@ try {
       companyName: 'Concurrency QA ' + i, contactPerson: 'QA',
       email: 'conc.' + tag + '.' + i + '@fleexbid.test',
       mobileNumber: '+91991100000' + i, gstNumber: '27AAAAA1111A1Z1', panNumber: 'AAAAA1111A',
-      vehicleTypes: ['32 FT Trailer'], operatingStates: ['Maharashtra'],
+      vehicleTypes: ['TRAILER'], operatingStates: ['Maharashtra'],
       preferredRoutes: ['Mumbai -> Delhi'], password: 'ConcPass!2026'
     }, adminJar);
     const b = await r.json();
@@ -44,7 +44,7 @@ try {
   r = await call('/api/requirements', 'POST', {
     requirements: [{
       pickupLocation: 'Conc City', deliveryLocation: 'Conc Town', material: 'Conc Material', weight: 10,
-      vehicleType: '32 FT Trailer', pickupDate: '2026-09-01', bidClosingTime: closing,
+      vehicleType: 'TRAILER', pickupDate: '2026-09-01', bidClosingTime: closing,
       awardType: 'AUTOMATIC',
       eligibleTransporters: created.transporters.map(t => t.id)
     }]
