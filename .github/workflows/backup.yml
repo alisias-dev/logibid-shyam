@@ -1,0 +1,103 @@
+name: Database Backup
+
+# Runs daily at 00:00 UTC (05:30 IST) plus on manual trigger.
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    name: Full snapshot + archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write   # required to upload workflow artifacts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run backup
+        id: backup
+        env:
+          # Production pooled connection string (PgBouncer). Must be added as a
+          # repository secret: Settings > Secrets and variables > Actions.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/backup.mjs
+
+      - name: Verify snapshot integrity
+        run: |
+          node -e '
+            const fs = require("fs");
+            const crypto = require("crypto");
+            const dirs = fs.readdirSync("backups").filter(d =>
+              fs.existsSync("backups/" + d + "/manifest.json"));
+            if (dirs.length === 0) { console.error("No backup snapshot found"); process.exit(1); }
+            const dir = "backups/" + dirs.sort().pop();
+            const man = JSON.parse(fs.readFileSync(dir + "/manifest.json", "utf8"));
+            const tables = Object.keys(man.tables);
+            console.log("Verifying " + tables.length + " tables in " + dir);
+            for (const t of tables) {
+              const f = dir + "/" + t + ".json";
+              if (!fs.existsSync(f)) { console.error("MISSING " + f); process.exit(1); }
+              const buf = fs.readFileSync(f);
+              const hash = crypto.createHash("sha256").update(buf).digest("hex");
+              const rows = JSON.parse(buf.toString("utf8"));
+              if (hash !== man.tables[t].sha256) { console.error("HASH MISMATCH " + t); process.exit(1); }
+              if (rows.length !== man.tables[t].rows) { console.error("ROW COUNT MISMATCH " + t); process.exit(1); }
+            }
+            console.log("Integrity OK - all " + tables.length + " tables verified (checksums + row counts)");
+          '
+
+      - name: Archive snapshot (GitHub artifact, 90-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fleexbid-backup-${{ github.run_number }}
+          path: backups/
+          retention-days: 90
+          if-no-files-found: error
+
+      # Optional: mirror the snapshot to S3 / Cloudflare R2 for permanent
+      # offsite retention. Configured only when the secrets below exist.
+      - name: Upload to S3 / R2 (optional)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_S3_BUCKET != '' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
+        run: |
+          ENDPOINT="${AWS_ENDPOINT_URL:-https://s3.${AWS_REGION:-us-east-1}.amazonaws.com}"
+          aws s3 sync backups/ "s3://${AWS_S3_BUCKET}/fleexbid-backups/" --endpoint-url "$ENDPOINT"
+          echo "Mirrored snapshot to s3://${AWS_S3_BUCKET}/fleexbid-backups/"
+
+      # Failure alerting: always logs a clear error; if ALERT_WEBHOOK_URL is set
+      # (e.g. ntfy.sh, Slack/Discord incoming webhook), posts the failure there.
+      # GitHub also emails repo admins on failed scheduled runs.
+      - name: Alert on failure
+        if: failure()
+        env:
+          WEBHOOK: ${{ secrets.ALERT_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "::error::FleexBid backup workflow FAILED - investigate immediately: $RUN_URL"
+          if [ -n "$WEBHOOK" ]; then
+            curl -s -X POST "$WEBHOOK" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"🚨 FleexBid database backup FAILED: $RUN_URL\"}" \
+              || echo "Webhook POST failed (non-fatal)"
+          else
+            echo "ALERT_WEBHOOK_URL not set - relying on GitHub's native failure email."
+          fi

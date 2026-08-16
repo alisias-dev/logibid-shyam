@@ -8,3 +8,12 @@ coverage/
 !.env.example
 
 .vercel
+
+# Legacy file-based database from the pre-Postgres era - dead code, never read
+# at runtime. Kept out of git so stale demo hashes/credentials are not shipped.
+db.json
+.env*.local
+
+# Database snapshots produced by scripts/backup.mjs - contain credential
+# hashes and full business data; keep off-site, never in git.
+backups/
