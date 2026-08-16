@@ -816,6 +816,7 @@ export default function RequirementsList() {
                           </div>
 
                           <div>
+                            <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Pickup Date</label>
                             <input
                               type="date"
                               required
@@ -826,6 +827,7 @@ export default function RequirementsList() {
                           </div>
 
                           <div>
+                            <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Bidding Closing Time</label>
                             <input
                               type="datetime-local"
                               required
