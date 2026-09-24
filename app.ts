@@ -446,15 +446,20 @@ onDBWrite(() => {
   authCache.clear();
 });
 
-// Clean up expired cache entries periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, entry] of authCache.entries()) {
-    if (entry.expiry < now) {
-      authCache.delete(token);
+// Clean up expired cache entries periodically. Pure in-memory work (no database
+// access), so it cannot wake a suspended Neon compute - but like the auction
+// and session loops below there is no point running it on serverless, where the
+// invocation freezes after the response anyway.
+if (!process.env.VERCEL) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [token, entry] of authCache.entries()) {
+      if (entry.expiry < now) {
+        authCache.delete(token);
+      }
     }
-  }
-}, 10000); // Check every 10 seconds
+  }, 10000); // Check every 10 seconds
+}
 
 // Distributed rate limiters backed by the rate_limits table - limits persist
 // across serverless cold starts (an in-memory limiter resets on every new
