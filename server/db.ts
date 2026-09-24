@@ -457,6 +457,79 @@ export async function getVisibleRequirementsForTransporter(
   return res.rows.map(rowToRequirementAward);
 }
 
+export interface DashboardMetrics {
+  total: number;
+  live: number;
+  awarded: number;
+  draft: number;
+  closed: number;
+  tiePending: number;
+  /** Sum of (target rate - awarded amount) over awarded requirements. */
+  savings: number;
+  /** Mean number of bids per requirement that received at least one bid. */
+  avgParticipation: number;
+}
+
+/**
+ * Server-side KPI aggregates for the dashboard.
+ *
+ * These used to be recomputed in the browser from the requirement list, which
+ * meant the dashboard and the AI advisor each carried their own copy of the
+ * "realised savings" formula and could disagree. Both now read the same
+ * definition, and `avgParticipation` is a real aggregate instead of the 4.2
+ * placeholder it used to be.
+ *
+ * Transporter visibility is irrelevant here: this is staff-only, and the savings
+ * figure is derived from clearing prices that only staff may see.
+ */
+export async function getDashboardMetrics(): Promise<DashboardMetrics> {
+  const totals = await queryPool(`
+    SELECT
+      count(*)::int AS total,
+      count(*) FILTER (WHERE r.status IN ('active', 'published', 'LIVE'))::int AS live,
+      count(*) FILTER (WHERE r.status = 'AWARDED')::int AS awarded,
+      count(*) FILTER (WHERE r.status = 'DRAFT')::int AS draft,
+      count(*) FILTER (WHERE r.status = 'CLOSED')::int AS closed,
+      count(*) FILTER (WHERE r.status = 'TIE_RESOLUTION_REQUIRED')::int AS tie_pending,
+      COALESCE(
+        sum(GREATEST(0, r.target_rate - a.amount))
+          FILTER (WHERE a.amount IS NOT NULL AND r.target_rate IS NOT NULL),
+        0
+      ) AS savings
+    FROM requirements r
+    LEFT JOIN awards a ON a.requirement_id = r.id
+    WHERE r.is_deleted = FALSE
+  `);
+
+  // Average bids per round, over requirements that actually attracted a bid.
+  const participation = await queryPool(`
+    SELECT COALESCE(avg(bid_count), 0) AS avg_participation
+    FROM (
+      SELECT count(*)::numeric AS bid_count
+      FROM bids b
+      JOIN requirements r ON r.id = b.requirement_id
+      WHERE r.is_deleted = FALSE
+      GROUP BY b.requirement_id
+    ) per_requirement
+  `);
+
+  const t = totals.rows[0] || {};
+  const p = participation.rows[0] || {};
+  return {
+    total: Number(t.total) || 0,
+    live: Number(t.live) || 0,
+    awarded: Number(t.awarded) || 0,
+    draft: Number(t.draft) || 0,
+    closed: Number(t.closed) || 0,
+    tiePending: Number(t.tie_pending) || 0,
+    savings: Number(t.savings) || 0,
+    // snake_case first: the pool's key normalizer is a fixed map for known
+    // business columns, so an aggregate alias like avg_participation comes back
+    // untouched (the camelCase fallback is only for robustness if that changes).
+    avgParticipation: Number(p.avg_participation ?? p.avgParticipation ?? 0) || 0
+  };
+}
+
 function rowToRequirementAward(row: any): { requirement: Requirement; award: Award | null } {
   const {
     award_id,
@@ -854,6 +927,15 @@ export async function initDatabase() {
     );
   `);
 
+  // WARNING - THIS DDL DOES NOT DESCRIBE PRODUCTION.
+  // In the live database every date field (timestamp, last_updated, and the
+  // matching columns on requirements/awards) is TIMESTAMPTZ, created by an
+  // earlier migration. CREATE TABLE IF NOT EXISTS never alters an existing
+  // column, so a fresh database built from this file and production disagree on
+  // the type. Code that works against one silently breaks on the other: a
+  // `COALESCE(max(b.last_updated), '')` reads fine here and fails against
+  // production with `22007 invalid input syntax for type timestamp with time
+  // zone`. Cast to ::text before coalescing, and do not assume these are strings.
   await queryPool(`
     CREATE TABLE IF NOT EXISTS bids (
       id VARCHAR(255) PRIMARY KEY,
@@ -1290,6 +1372,28 @@ export async function ensureIndexes() {
       window_seconds INTEGER NOT NULL
     );
   `);
+  // Error ledger (Phase: observability). De-duplicated by fingerprint, so an
+  // error storm collapses into one row with a rising counter instead of
+  // thousands of rows. Created here for the same reason as rate_limits: a
+  // production cold start on an existing schema never runs initDatabase().
+  await queryPool(`
+    CREATE TABLE IF NOT EXISTS app_errors (
+      fingerprint VARCHAR(64) PRIMARY KEY,
+      message TEXT NOT NULL,
+      stack TEXT,
+      route VARCHAR(255),
+      method VARCHAR(10),
+      status_code INTEGER,
+      user_id VARCHAR(255),
+      role VARCHAR(50),
+      request_id VARCHAR(64),
+      occurrences INTEGER NOT NULL DEFAULT 1,
+      first_seen VARCHAR(50) NOT NULL,
+      last_seen VARCHAR(50) NOT NULL,
+      resolved BOOLEAN NOT NULL DEFAULT FALSE
+    );
+  `);
+  await queryPool('CREATE INDEX IF NOT EXISTS idx_app_errors_last_seen ON app_errors (last_seen);');
   // Soft-delete columns (Phase 5 - data persistence): existing tables created
   // before this migration have no is_deleted column; CREATE TABLE IF NOT EXISTS
   // does not alter them, so add the column idempotently here.

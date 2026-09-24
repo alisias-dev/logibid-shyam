@@ -41,7 +41,8 @@ import {
   getNotificationLogs,
   getExpiredLiveRequirements,
   cleanupExpiredSessions,
-  invalidateReadCache
+  invalidateReadCache,
+  getDashboardMetrics
 } from './server/db';
 import { queryPool, getPoolInfo } from './server/db_pool';
 import { dbRateLimiter } from './server/rate-limit';
@@ -58,6 +59,16 @@ import {
   notifyAwardedBid, 
   notifyLostBid
 } from './server/notifications';
+import {
+  attachRequestContext,
+  attachErrorHandler,
+  captureProcessErrors,
+  healthReport,
+  listErrors,
+  resolveError,
+  reportError,
+  snapshotToken
+} from './server/observability';
 import { 
   User, 
   Transporter, 
@@ -79,6 +90,15 @@ import aiRouter from './server/ai-router';
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+
+// Request ids + structured failure/slowness logs. Registered FIRST because an
+// error thrown by middleware registered before this point never reaches a
+// middleware registered after it: a malformed JSON body is rejected inside
+// express.json(), so a request id installed later would be missing from exactly
+// the responses an operator is most likely to be asked about.
+attachRequestContext(app);
+// Turn stray background rejections into recorded failures instead of silence.
+captureProcessErrors();
 
 // Enforce strict environment validation at launch
 const isProduction = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
@@ -1474,6 +1494,39 @@ app.get('/api/requirements', authenticate, requirementsLimiter, async (req, res)
 });
 
 /**
+ * Single source of truth for "may this user read this requirement's detail?".
+ * The detail endpoint and its streaming companion both call it so their
+ * authorization rules cannot drift apart - a divergence there would expose a
+ * targeted auction to an uninvited transporter.
+ */
+async function canReadRequirementDetail(
+  reqItem: Requirement,
+  // Matches the shape of req.user (see the Express augmentation below): the
+  // stored User type narrows `role` to staff, and a transporter is exactly the
+  // case this guard exists for.
+  user: { id: string; role: UserRole }
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  if (user.role !== 'TRANSPORTER') return { ok: true };
+
+  const isPublic = !reqItem.targeted_transporter_ids || reqItem.targeted_transporter_ids.length === 0;
+  const isTargeted = !!reqItem.targeted_transporter_ids && reqItem.targeted_transporter_ids.includes(user.id);
+  if (!isPublic && !isTargeted) {
+    return { ok: false, status: 403, error: 'Access Denied: You are not authorized to participate in this bidding requirement.' };
+  }
+
+  const isInvited = await hasInvitation(reqItem.id, user.id);
+  const isOpenLoad = reqItem.status === 'active' || reqItem.status === 'published' || reqItem.status === 'LIVE';
+  const hasBid = !!(await getBidFor(reqItem.id, user.id));
+  const award = await getAwardForRequirement(reqItem.id);
+  const hasAward = !!(award && award.transporterId === user.id);
+
+  if (!isInvited && !isOpenLoad && !hasBid && !hasAward) {
+    return { ok: false, status: 403, error: 'Forbidden: You are not invited to participate in this auction' };
+  }
+  return { ok: true };
+}
+
+/**
  * GET /api/requirements/:id
  * Fetches requirement detail. Restricts non-invited transporters.
  */
@@ -1485,23 +1538,10 @@ app.get('/api/requirements/:id', authenticate, requirementsLimiter, async (req, 
     return res.status(404).json({ error: 'Requirement not found' });
   }
 
-  // Transporter eligibility guard
-  if (req.user!.role === 'TRANSPORTER') {
-    const isPublic = !reqItem.targeted_transporter_ids || reqItem.targeted_transporter_ids.length === 0;
-    const isTargeted = reqItem.targeted_transporter_ids && reqItem.targeted_transporter_ids.includes(req.user!.id);
-    if (!isPublic && !isTargeted) {
-      return res.status(403).json({ error: 'Access Denied: You are not authorized to participate in this bidding requirement.' });
-    }
-
-    const isInvited = await hasInvitation(id, req.user!.id);
-    const isOpenLoad = reqItem.status === 'active' || reqItem.status === 'published' || reqItem.status === 'LIVE';
-    const hasBid = !!(await getBidFor(id, req.user!.id));
-    const award = await getAwardForRequirement(id);
-    const hasAward = !!(award && award.transporterId === req.user!.id);
-
-    if (!isInvited && !isOpenLoad && !hasBid && !hasAward) {
-      return res.status(403).json({ error: 'Forbidden: You are not invited to participate in this auction' });
-    }
+  // Transporter eligibility guard - shared with the streaming endpoint below.
+  const access = await canReadRequirementDetail(reqItem, req.user!);
+  if (!access.ok) {
+    return res.status(access.status || 403).json({ error: access.error });
   }
 
   // CONFIDENTIALITY: transporters must never see the list of competing
@@ -1534,6 +1574,143 @@ app.get('/api/requirements/:id', authenticate, requirementsLimiter, async (req, 
     requirement: requirementWithAward,
     invitedTransporters: invitedTrs
   });
+});
+
+/**
+ * GET /api/requirements/:id/stream
+ *
+ * Server-Sent Events companion to the detail endpoint: the client is told the
+ * moment an auction actually changes (a new bid, a close, an award) instead of
+ * waiting for the next poll tick.
+ *
+ * WHY IT LOOKS LIKE THIS: Socket.IO cannot work on this host - vercel.json
+ * rewrites every path to /index.html, so /socket.io/ never reaches the server,
+ * and the Node runtime has no place to keep a websocket. SSE needs no upgrade
+ * handshake, so it survives the rewrite. The connection is bounded (~25s) and
+ * the client reconnects itself; the platform's function duration cap therefore
+ * truncates a stream gracefully instead of breaking the page, and the polling
+ * fallback still covers the gap if a proxy buffers the stream.
+ *
+ * The payload is deliberately just an opaque token: what changed is not
+ * described, only that something did, so the stream can never leak a winner's
+ * identity or a clearing price to a losing bidder. The client re-reads the
+ * (masked) detail endpoint when the token flips.
+ */
+const STREAM_POLL_MS = 2000;
+const STREAM_WINDOW_MS = 25000;
+
+app.get('/api/requirements/:id/stream', authenticate, requirementsLimiter, async (req, res) => {
+  const { id } = req.params;
+
+  const reqItem = await getRequirementById(id);
+  if (!reqItem) {
+    return res.status(404).json({ error: 'Requirement not found' });
+  }
+
+  const access = await canReadRequirementDetail(reqItem, req.user!);
+  if (!access.ok) {
+    return res.status(access.status || 403).json({ error: access.error });
+  }
+
+  // Everything the detail page renders, folded into one hash. bid_count and
+  // last_bid_at are the volatile parts; status/closing time catch closes.
+  const readToken = async (): Promise<string> => {
+    const result = await queryPool(
+      `SELECT r.status,
+              r.bid_closing_time,
+              r.is_deleted,
+              (SELECT count(*)::int FROM bids b WHERE b.requirement_id = r.id) AS bid_count,
+              -- ::text is load-bearing: production's bids.last_updated is a
+              -- TIMESTAMPTZ (an older migration created it that way, and CREATE
+              -- TABLE IF NOT EXISTS never alters an existing column), so
+              -- COALESCE(max(...), '') tries to parse '' as a timestamp and
+              -- fails with 22007. Casting makes the query work on both shapes.
+              (SELECT COALESCE(max(b.last_updated)::text, '') FROM bids b WHERE b.requirement_id = r.id) AS last_bid_at,
+              (SELECT count(*)::int FROM awards a WHERE a.requirement_id = r.id) AS award_count
+         FROM requirements r
+        WHERE r.id = $1`,
+      [id]
+    );
+    const row = result.rows[0];
+    if (!row) return 'gone';
+    return snapshotToken([
+      row.status,
+      row.bidClosingTime,
+      row.isDeleted,
+      row.bidCount,
+      row.lastBidAt,
+      row.awardCount
+    ]);
+  };
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    // Ask intermediaries not to buffer, otherwise events arrive in one lump and
+    // the connection looks like a hang until it closes.
+    'X-Accel-Buffering': 'no'
+  });
+  if (typeof (res as any).flushHeaders === 'function') (res as any).flushHeaders();
+
+  let closed = false;
+  let token = '';
+  let windowTimer: NodeJS.Timeout | undefined;
+  // Declared before stop() below: stop() also runs on the early-exit path, where
+  // the interval has not been created yet.
+  let poll: NodeJS.Timeout | undefined;
+
+  const write = (chunk: string) => {
+    if (closed) return;
+    try {
+      res.write(chunk);
+    } catch {
+      closed = true;
+    }
+  };
+
+  const stop = () => {
+    if (closed) return;
+    closed = true;
+    if (poll) clearInterval(poll);
+    if (windowTimer) clearTimeout(windowTimer);
+    try {
+      res.end();
+    } catch {
+      /* the client already went away */
+    }
+  };
+
+  try {
+    token = await readToken();
+  } catch (error) {
+    // End the stream rather than hold open a connection that can never report
+    // anything - but record WHY. Returning silently here is indistinguishable
+    // from a client that simply navigated away, which is how a broken token
+    // query produced a 200 with an empty body and no trace of the cause.
+    await reportError(error, { req, scope: 'GET /api/requirements/:id/stream' });
+    return stop();
+  }
+
+  // EventSource reconnects on its own - tell it how soon.
+  write(`retry: 3000\nevent: ready\ndata: ${JSON.stringify({ token })}\n\n`);
+
+  poll = setInterval(async () => {
+    if (closed) return;
+    try {
+      const next = await readToken();
+      if (next !== token) {
+        token = next;
+        write(`event: update\ndata: ${JSON.stringify({ token })}\n\n`);
+      } else {
+        write(': keep-alive\n\n');
+      }
+    } catch {
+      /* transient DB blip: keep the stream open and try again next tick */
+    }
+  }, STREAM_POLL_MS);
+
+  windowTimer = setTimeout(stop, STREAM_WINDOW_MS);
+  req.on('close', stop);
 });
 
 /**
@@ -3195,10 +3372,72 @@ app.get('/api/db-verify', authenticate, authorize(['SUPER_ADMIN']), async (req, 
 });
 
 
+// ==========================================
+// OBSERVABILITY ENDPOINTS
+// ==========================================
+
+/**
+ * GET /api/health
+ * Liveness + readiness for an uptime monitor. Unauthenticated by design - a
+ * monitor cannot hold a session - and it reports only booleans about
+ * configuration, never a secret value. 503 when the database is unreachable so
+ * a monitor can distinguish "deployed" from "actually working".
+ */
+app.get('/api/health', async (_req, res) => {
+  const report = await healthReport();
+  return res.status(report.ok ? 200 : 503).json(report);
+});
+
+/**
+ * GET /api/metrics/dashboard
+ * Staff KPIs computed in SQL, so the dashboard and the AI advisor read one
+ * definition of realised savings (see getDashboardMetrics in server/db.ts).
+ * Staff-only: the savings figure is derived from clearing prices.
+ */
+app.get('/api/metrics/dashboard', authenticate, authorize(['SUPER_ADMIN', 'LOGISTICS']), async (req, res) => {
+  try {
+    const metrics = await getDashboardMetrics();
+    return res.json({ metrics });
+  } catch (error) {
+    await reportError(error, { req, scope: 'GET /api/metrics/dashboard' });
+    return res.status(500).json({ error: 'Failed to compute dashboard metrics', requestId: (req as any).requestId });
+  }
+});
+
+/**
+ * GET /api/logs/errors
+ * The durable error ledger, newest-first and de-duplicated by fingerprint, so
+ * `occurrences` says how many times one exact failure has happened.
+ */
+app.get('/api/logs/errors', authenticate, authorize(['SUPER_ADMIN']), async (req, res) => {
+  const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
+  const includeResolved = String(req.query.includeResolved || '') === 'true';
+  const errors = await listErrors(limit, includeResolved);
+  return res.json({ errors, total: errors.length });
+});
+
+/**
+ * POST /api/logs/errors/:fingerprint/resolve
+ * Marks a known failure as triaged. A recurrence clears the flag automatically,
+ * so "resolved" cannot hide a problem that has come back.
+ */
+app.post('/api/logs/errors/:fingerprint/resolve', authenticate, authorize(['SUPER_ADMIN']), async (req, res) => {
+  const resolved = await resolveError(String(req.params.fingerprint));
+  if (!resolved) {
+    return res.status(404).json({ error: 'Unknown error fingerprint' });
+  }
+  return res.json({ success: true });
+});
+
 // Unmatched API routes return JSON 404 instead of the SPA fallback HTML
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
+
+// Terminal error handler - MUST be last. Unhandled route errors are recorded in
+// the ledger above and answered with a generic 5xx body plus the request id,
+// instead of leaking an internal message or a stack trace to the client.
+attachErrorHandler(app);
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

@@ -1,0 +1,57 @@
+name: CI
+
+# WHY THIS EXISTS
+#
+# Production deploys were the only check in the pipeline, so a type error or a
+# broken build was discovered by whoever happened to load the site next. This job
+# is the gate: it runs the same two commands the Vercel build runs
+# (`npm run lint` and `npm run build`, i.e. `npm test`), plus a check that no
+# .env file is ever committed - the repository is public and an earlier commit
+# leaked the live admin password that way.
+#
+# It deliberately does NOT run the scripts/*-verify.mjs suite: those talk to a
+# real PostgreSQL database and create/consume fixtures in it, which is not
+# something a push-triggered job should do against the production database.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Refuse to ship committed environment files
+        shell: bash
+        run: |
+          tracked=$(git ls-files -- '.env' '.env.*' '.env*.local' | grep -v '^\.env\.example$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::Environment files are tracked in git: $tracked"
+            echo "These contain live credentials. Remove them from the index AND rotate every secret they exposed."
+            exit 1
+          fi
+          echo "No committed .env files."
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and build
+        run: npm test

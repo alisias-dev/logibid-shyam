@@ -11,6 +11,33 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          /**
+           * Split the framework and icon set into their own long-lived chunks.
+           *
+           * Every route imported React, the router and a fistful of lucide icons,
+           * so Rollup had to either duplicate them per route chunk or hoist them
+           * into the single ~1MB entry chunk. Both hurt: the entry chunk had to be
+           * re-downloaded on every deploy, and each route chunk pulled in its own
+           * copy. These two rarely change, so the browser now keeps them across
+           * releases. Everything else is split per route by the React.lazy()
+           * boundaries in src/App.tsx.
+           */
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return;
+            if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
+              return 'vendor-react';
+            }
+            if (/[\\/]node_modules[\\/](lucide-react)[\\/]/.test(id)) {
+              return 'vendor-icons';
+            }
+            return undefined;
+          },
+        },
+      },
+    },
     server: {
       // Proxy /api calls to local Express backend server if Vite is run directly
       proxy: {

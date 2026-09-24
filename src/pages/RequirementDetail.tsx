@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { io, Socket } from 'socket.io-client';
 import api from '../lib/api';
 import { useAuth } from '../components/AuthContext';
 import { 
@@ -23,6 +22,12 @@ import {
   Send
 } from 'lucide-react';
 import ExportAwardPdfButton from '../components/OfficialAwardPdf';
+
+// Same base the API client uses, so the stream URL follows any deployment that
+// points the frontend at a separate API origin.
+const API_BASE = ((import.meta.env.VITE_API_URL as string) || '/api').replace(/\/$/, '');
+// Only used when the event stream is unavailable (see the realtime effect below).
+const POLL_FALLBACK_MS = 5000;
 
 export default function RequirementDetail() {
   const { id } = useParams<{ id: string }>();
@@ -51,51 +56,28 @@ export default function RequirementDetail() {
   const [timeLeft, setTimeLeft] = useState('');
   const [isExpired, setIsExpired] = useState(false);
 
-  // Socket reference
-  const socketRef = useRef<Socket | null>(null);
-
-  // Realtime transport.
-  //
-  // Socket.IO is treated as an ACCELERATOR only, not the source of truth. On
-  // serverless hosting the `/socket.io/` handshake is answered by the SPA
-  // catch-all rewrite (it returns index.html), so the connection can never be
-  // established. Previously that meant rank tables loaded ONCE on mount and then
-  // never changed - a bidder could sit on a bidding screen indefinitely without
-  // ever seeing a competitor's new bid, a rank change, or an award.
-  //
-  // The polling effect below is what actually guarantees freshness; the socket
-  // simply makes updates instant wherever the transport happens to work
-  // (local dev, self-hosted).
+  // Initial load. Live updates are handled by the realtime effect below.
   useEffect(() => {
     loadRequirementAndRanks();
-
-    const socket = io(window.location.origin, {
-      withCredentials: true,
-      reconnectionAttempts: 3
-    });
-    socketRef.current = socket;
-    socket.on('connect_error', () => {
-      // Expected when the realtime endpoint is unreachable - the polling loop
-      // covers it, so stay quiet rather than logging on every retry attempt.
-    });
-
-    socket.emit('join_requirement', id);
-
-    socket.on('rank_updated', () => {
-      loadRanks();
-    });
-
-    return () => {
-      socket.emit('leave_requirement', id);
-      socket.disconnect();
-    };
   }, [id]);
 
-  // Fallback refresh loop - the guarantee that keeps bids, ranks and awards
-  // live. Runs only while the auction is OPEN, and stops automatically once the
-  // round reaches a terminal state (nothing can change after that). The silent
-  // refetch does not toggle the loading state, so it never causes a layout
-  // shift or a spinner flash.
+  // Realtime transport: Server-Sent Events, with polling as the safety net.
+  //
+  // WHY NOT SOCKET.IO: vercel.json rewrites every path to /index.html, so the
+  // /socket.io/ handshake is answered with HTML and can never connect - and the
+  // serverless runtime has no process to hold a websocket anyway. SSE needs no
+  // upgrade handshake, so it survives that rewrite and works on the deployed
+  // host. Previously ranks loaded ONCE on mount and then never changed: a bidder
+  // could sit on a bidding screen indefinitely without seeing a competitor's
+  // new bid, a rank change, or an award.
+  //
+  // The server deliberately ends each stream after ~25s and the browser
+  // reconnects on its own, which keeps a connection inside the host's function
+  // duration budget. If the stream cannot be established (or an intermediary
+  // buffers it into uselessness) the failure counter hands over to the polling
+  // loop, so freshness is never worse than it was before this change. Runs only
+  // while the auction is OPEN - the round reaching a terminal state is itself a
+  // change, so there is nothing left to watch after that.
   useEffect(() => {
     if (!requirement) return;
     const isOpen =
@@ -104,11 +86,59 @@ export default function RequirementDetail() {
       requirement.status === 'published';
     if (!isOpen) return;
 
-    const interval = setInterval(() => {
-      loadRequirementAndRanks(true);
-    }, 5000);
+    let disposed = false;
+    let source: EventSource | null = null;
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+    let streamFailures = 0;
 
-    return () => clearInterval(interval);
+    const startPolling = () => {
+      if (disposed || pollInterval !== null) return;
+      // Silent refetch: no spinner, so it can never cause a layout shift.
+      pollInterval = setInterval(() => {
+        if (!disposed) loadRequirementAndRanks(true);
+      }, POLL_FALLBACK_MS);
+    };
+
+    const stopPolling = () => {
+      if (pollInterval === null) return;
+      clearInterval(pollInterval);
+      pollInterval = null;
+    };
+
+    if (typeof EventSource === 'undefined') {
+      startPolling();
+    } else {
+      source = new EventSource(`${API_BASE}/requirements/${id}/stream`, { withCredentials: true });
+
+      source.addEventListener('ready', () => {
+        // A healthy stream beats polling: an auction change is pushed the moment
+        // it happens, instead of being discovered on the next tick.
+        streamFailures = 0;
+        stopPolling();
+      });
+
+      source.addEventListener('update', () => {
+        if (!disposed) loadRequirementAndRanks(true);
+      });
+
+      source.onerror = () => {
+        // EventSource retries on its own. Two consecutive failures mean the
+        // stream is unusable here, so fall back to polling rather than leave the
+        // page stale.
+        streamFailures += 1;
+        if (streamFailures >= 2) {
+          source?.close();
+          source = null;
+          startPolling();
+        }
+      };
+    }
+
+    return () => {
+      disposed = true;
+      stopPolling();
+      source?.close();
+    };
   }, [requirement?.status, id]);
 
   async function loadRequirementAndRanks(silent = false) {

@@ -25,6 +25,10 @@ export default function Dashboard() {
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Renders "—" rather than a blank or a fake 0 when a metric is unavailable, so
+  // a failing metrics call cannot look like a legitimate zero.
+  const kpi = (value: any) => (value === null || value === undefined ? '—' : value);
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -43,48 +47,36 @@ export default function Dashboard() {
             invited: invitedCount,
             live: liveCount,
             won: wonCount,
-            pending: pendingCount,
-            avgRank: 1.4,
-            unreads: 2
+            // Replaces two invented numbers: "L1.4" average ranking position and
+            // an unread count of 2. There is no cross-requirement rank aggregate
+            // and no read-state model behind either one, so neither could be made
+            // honest - this is the count of closed rounds awaiting a result,
+            // which is both real and actually useful to a bidder.
+            awaitingResult: pendingCount
           });
         } else {
-          // Admin/Logistics stats
-          const liveCount = reqs.filter((r: any) => r.status === 'LIVE' || r.status === 'active' || r.status === 'published').length;
-          const awardedCount = reqs.filter((r: any) => r.status === 'AWARDED').length;
-          const draftCount = reqs.filter((r: any) => r.status === 'DRAFT').length;
-          const tieCount = reqs.filter((r: any) => r.status === 'TIE_RESOLUTION_REQUIRED').length;
-          const closedCount = reqs.filter((r: any) => r.status === 'CLOSED').length;
-
-          // Realised savings = (target rate - awarded amount) summed over every
-          // awarded requirement. This is the SAME definition the AI advisor uses
-          // (server/ai-router.ts), so the dashboard and the advisor can no longer
-          // report contradictory figures for one metric. This used to be
-          // hardcoded to 182400, which is why the dashboard and the advisor
-          // disagreed by more than 2x.
-          //
-          // NOTE: `awardedAmount`/`targetRate` arrive as strings (Postgres
-          // numeric), and absent values arrive as null/undefined - Number() plus
-          // isFinite() guards both without silently counting NaN.
-          let totalSavings = 0;
-          for (const r of reqs) {
-            const awarded = Number(r.awardedAmount);
-            const target = Number(r.targetRate);
-            if (Number.isFinite(awarded) && awarded > 0 && Number.isFinite(target) && target > 0) {
-              totalSavings += Math.max(0, target - awarded);
-            }
+          // Admin/Logistics KPIs. These are read from the server (see
+          // getDashboardMetrics) rather than recomputed here: the dashboard and
+          // the AI advisor used to carry separate copies of the "realised
+          // savings" formula and could report contradictory figures for it, and
+          // average bids per round was a hardcoded 4.2 placeholder. Now there is
+          // one definition in the system. A failed call degrades to an em dash.
+          try {
+            const metricsData = await api.get('/metrics/dashboard');
+            const m = metricsData.metrics || {};
+            setMetrics({
+              live: m.live ?? 0,
+              awarded: m.awarded ?? 0,
+              draft: m.draft ?? 0,
+              tieCount: m.tiePending ?? 0,
+              closed: m.closed ?? 0,
+              savings: m.savings ?? 0,
+              avgParticipation: m.avgParticipation ?? null
+            });
+          } catch (metricsError) {
+            console.error('Failed to load dashboard KPIs', metricsError);
+            setMetrics(null);
           }
-
-          setMetrics({
-            live: liveCount,
-            awarded: awardedCount,
-            draft: draftCount,
-            tieCount: tieCount,
-            closed: closedCount,
-            savings: totalSavings,
-            // PLACEHOLDER: average bids per round needs a per-requirement bid
-            // count, which /api/requirements does not return yet.
-            avgParticipation: 4.2
-          });
 
           // If super admin, fetch recent audit trails (newest-first, paginated)
           if (user?.role === 'SUPER_ADMIN') {
@@ -163,7 +155,7 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-medium">Invited Requirements</div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{metrics?.invited}</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{kpi(metrics?.invited)}</div>
             </div>
           </div>
 
@@ -173,7 +165,7 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-medium">Active Rounds</div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{metrics?.live}</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{kpi(metrics?.live)}</div>
             </div>
           </div>
 
@@ -183,7 +175,7 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-medium">Won Contracts</div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{metrics?.won}</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{kpi(metrics?.won)}</div>
             </div>
           </div>
 
@@ -191,9 +183,8 @@ export default function Dashboard() {
             <div className="w-12 h-12 rounded-lg bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 flex items-center justify-center">
               <TrendingUp className="w-6 h-6" />
             </div>
-            <div>
-              <div className="text-xs text-slate-400 font-medium">Avg Ranking Position</div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">L{metrics?.avgRank}</div>
+            <div>                <div className="text-xs text-slate-400 font-medium">Awaiting Result</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{kpi(metrics?.awaitingResult)}</div>
             </div>
           </div>
         </div>
@@ -206,7 +197,7 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-medium">Live Auctions</div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{metrics?.live}</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{kpi(metrics?.live)}</div>
             </div>
           </div>
 
@@ -216,7 +207,7 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-medium">Awarded Contracts</div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{metrics?.awarded}</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{kpi(metrics?.awarded)}</div>
             </div>
           </div>
 
@@ -226,7 +217,7 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-medium">Reverse Auction Savings</div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">₹{metrics?.savings.toLocaleString()}</div>
+              <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">₹{kpi(metrics?.savings).toLocaleString()}</div>
             </div>
           </div>
 
@@ -237,7 +228,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <div className="text-xs text-rose-500 dark:text-rose-400 font-bold">L1 Tie Resolution Required!</div>
-                <div className="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1 font-mono">{metrics?.tieCount}</div>
+                <div className="text-2xl font-bold text-rose-600 dark:text-rose-400 mt-1 font-mono">{kpi(metrics?.tieCount)}</div>
               </div>
             </div>
           ) : (
@@ -247,7 +238,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <div className="text-xs text-slate-400 font-medium">Avg Bids Per Round</div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{metrics?.avgParticipation}</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1 font-mono">{kpi(metrics?.avgParticipation)}</div>
               </div>
             </div>
           )}
