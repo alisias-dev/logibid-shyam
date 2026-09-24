@@ -29,7 +29,8 @@ name: Close Expired Auctions
 #
 #   Repository secret CRON_SECRET (Settings > Secrets and variables > Actions)
 #   must match the CRON_SECRET environment variable set on the Vercel project.
-#   Without it the endpoint fails CLOSED and this job reports 401/403.
+#   Until it is set this job no-ops with a notice instead of failing, so the
+#   daily Vercel Cron backstop (see vercel.json) is the only scheduler running.
 #
 # CAVEATS
 #
@@ -63,8 +64,12 @@ jobs:
           SITE_URL: https://www.fleexbid.live
         run: |
           if [ -z "$CRON_SECRET" ]; then
-            echo "::error::CRON_SECRET repository secret is not set - refusing to call the endpoint."
-            exit 1
+            echo "::notice::CRON_SECRET repository secret is not set yet - skipping this run."
+            echo "The daily Vercel Cron entry in vercel.json still drains the expired queue,"
+            echo "and the lazy on-request close still catches anything a browsing user touches."
+            echo "Add CRON_SECRET under Settings > Secrets and variables > Actions (same value as"
+            echo "the Vercel Production env var) to enable 5-minute granularity."
+            exit 0
           fi
 
           code=$(curl -sS --max-time 60 -o /tmp/body -w '%{http_code}' \
