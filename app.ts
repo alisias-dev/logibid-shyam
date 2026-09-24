@@ -472,6 +472,20 @@ const loginLimiter = dbRateLimiter({
   message: 'Too many login attempts. Please try again after 15 minutes.'
 });
 
+// Token-refresh attempts. Rotation with a VALID token performs session-table
+// reads plus rotation writes (sessions + audit), so an unthrottled loop here is
+// a free database-work amplifier for anyone holding a leaked token; junk
+// requests fail at JWT verification before the database and cost nothing, so
+// this limiter exists to cap the authenticated-shaped case. 60/min per IP is
+// far above legitimate silent-refresh traffic (a few requests per hour per
+// session) and stays safely under a shared-office NAT's aggregate.
+const refreshLimiter = dbRateLimiter({
+  name: 'refresh',
+  windowMs: 1 * 60 * 1000,
+  max: 60,
+  message: 'Too many session refresh attempts. Please slow down.'
+});
+
 const biddingLimiter = dbRateLimiter({
   name: 'bid',
   windowMs: 1 * 60 * 1000, // 1 minute
@@ -1047,7 +1061,7 @@ app.post('/api/auth/login-transporter', loginLimiter, async (req, res) => {
  * POST /api/auth/refresh
  * Silent access token refresh using rotating refresh tokens
  */
-app.post('/api/auth/refresh', async (req, res) => {
+app.post('/api/auth/refresh', refreshLimiter, async (req, res) => {
   const { deviceId, refreshToken: bodyRefreshToken } = req.body;
   const customHeader = req.headers['x-refresh-token'];
   let token = bodyRefreshToken || (customHeader ? String(customHeader) : null) || req.cookies?.refreshToken;
@@ -3381,6 +3395,11 @@ app.get('/api/db-verify', authenticate, authorize(['SUPER_ADMIN']), async (req, 
 // OBSERVABILITY ENDPOINTS
 // ==========================================
 
+// Sliding window for deep-health throttling (see GET /api/health). Per lambda
+// instance, in-memory only - deliberately not the DB limiter, which would cost
+// a rate_limits write on the one path designed to avoid database work.
+let deepHealthHits: number[] = [];
+
 /**
  * GET /api/health
  * Liveness + readiness for an uptime monitor. Unauthenticated by design - a
@@ -3391,10 +3410,28 @@ app.get('/api/db-verify', authenticate, authorize(['SUPER_ADMIN']), async (req, 
  * monitor cannot keep Neon's compute awake (and the bill with it). Append
  * ?deep=1 for the database round-trip; a deep check that finds the database
  * down returns 503. Recommended monitoring: this endpoint every minute, and
- * ?deep=1 at most every 10-15 minutes.
+ * ?deep=1 at most every 10-15 minutes (it is additionally throttled to 20/min
+ * per lambda instance - see the handler).
  */
 app.get('/api/health', async (req, res) => {
   const deep = String(req.query.deep || '') === '1' || String(req.query.deep || '') === 'true';
+  // COST GUARD: deep mode runs a Postgres round-trip, and this endpoint is
+  // public - it is the ONE unauthenticated URL whose queries wake the Neon
+  // compute, so a bot loop against ?deep=1 would buy an always-on database.
+  // A single-process counter cannot stop distributed abuse, but it makes the
+  // free-amplification case boring: over 20 deep checks per minute per lambda
+  // answer from cache and cost nothing. The shallow default (the mode a
+  // high-frequency monitor should use) is untouched and does not reach this
+  // branch, and no rate_limits row is written - the limiter table itself would
+  // be a database wake-up on the very path meant to avoid one.
+  if (deep) {
+    const now = Date.now();
+    deepHealthHits = deepHealthHits.filter((t) => now - t < 60_000);
+    if (deepHealthHits.length >= 20) {
+      return res.status(429).json({ error: 'Too many deep health checks. Use the default shallow check for monitoring.' });
+    }
+    deepHealthHits.push(now);
+  }
   const report = await healthReport(deep);
   return res.status(report.ok ? 200 : 503).json(report);
 });
