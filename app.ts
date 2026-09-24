@@ -3380,11 +3380,17 @@ app.get('/api/db-verify', authenticate, authorize(['SUPER_ADMIN']), async (req, 
  * GET /api/health
  * Liveness + readiness for an uptime monitor. Unauthenticated by design - a
  * monitor cannot hold a session - and it reports only booleans about
- * configuration, never a secret value. 503 when the database is unreachable so
- * a monitor can distinguish "deployed" from "actually working".
+ * configuration, never a secret value.
+ *
+ * COST: shallow by default - it does NOT touch Postgres, so a 1-minute uptime
+ * monitor cannot keep Neon's compute awake (and the bill with it). Append
+ * ?deep=1 for the database round-trip; a deep check that finds the database
+ * down returns 503. Recommended monitoring: this endpoint every minute, and
+ * ?deep=1 at most every 10-15 minutes.
  */
-app.get('/api/health', async (_req, res) => {
-  const report = await healthReport();
+app.get('/api/health', async (req, res) => {
+  const deep = String(req.query.deep || '') === '1' || String(req.query.deep || '') === 'true';
+  const report = await healthReport(deep);
   return res.status(report.ok ? 200 : 503).json(report);
 });
 

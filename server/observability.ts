@@ -372,7 +372,9 @@ export interface HealthReport {
   commit: string | null;
   region: string | null;
   checks: {
-    database: { ok: boolean; latencyMs: number | null; error?: string };
+    // `ok: null` means the database was deliberately NOT queried this request
+    // (shallow mode) - it is not an unknown failure.
+    database: { ok: boolean | null; latencyMs: number | null; checked: boolean; error?: string };
     cronSecretConfigured: boolean;
     errorWebhookConfigured: boolean;
     pool: { total: number; idle: number; waiting: number };
@@ -380,25 +382,38 @@ export interface HealthReport {
 }
 
 /**
- * Cheap, secret-free liveness/readiness snapshot for an uptime monitor. Reports
- * only booleans about configuration, never the values themselves.
+ * Liveness/readiness snapshot for an uptime monitor. Reports only booleans about
+ * configuration, never the values themselves.
+ *
+ * COST: on Neon's usage-based plans the bill is compute-hours and the compute
+ * suspends after ~5 idle minutes. `SELECT 1` therefore counts: a monitor pinging
+ * the database every minute would keep the compute awake around the clock and
+ * quietly turn the bill into the always-on floor. Shallow mode (the default)
+ * answers "is the app up and correctly configured" without touching Postgres;
+ * `deep` adds the database round-trip for a human or an infrequent (10 min+)
+ * synthetic check who genuinely wants to know.
  */
-export async function healthReport(): Promise<HealthReport> {
-  const startedAt = Date.now();
-  let database: HealthReport['checks']['database'] = { ok: false, latencyMs: null };
-  try {
-    await queryPool('SELECT 1');
-    database = { ok: true, latencyMs: Date.now() - startedAt };
-  } catch (err: any) {
-    database = {
-      ok: false,
-      latencyMs: null,
-      error: String(err?.message || 'database unreachable').slice(0, 200)
-    };
+export async function healthReport(deep = false): Promise<HealthReport> {
+  let database: HealthReport['checks']['database'] = { ok: null, latencyMs: null, checked: false };
+  if (deep) {
+    const startedAt = Date.now();
+    try {
+      await queryPool('SELECT 1');
+      database = { ok: true, latencyMs: Date.now() - startedAt, checked: true };
+    } catch (err: any) {
+      database = {
+        ok: false,
+        latencyMs: null,
+        checked: true,
+        error: String(err?.message || 'database unreachable').slice(0, 200)
+      };
+    }
   }
 
   let pool = { total: 0, idle: 0, waiting: 0 };
   try {
+    // Reads pool counters only - creating/inspecting the pool opens no sockets,
+    // so this is safe in shallow mode.
     const info = getPoolInfo();
     pool = { total: info.totalCount, idle: info.idleCount, waiting: info.waitingCount };
   } catch {
@@ -406,7 +421,9 @@ export async function healthReport(): Promise<HealthReport> {
   }
 
   return {
-    ok: database.ok,
+    // Shallow mode reports liveness of the process; only a deep check that ran
+    // and failed can turn this false.
+    ok: database.ok !== false,
     time: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
     environment: process.env.VERCEL_ENV || process.env.NODE_ENV || 'unknown',

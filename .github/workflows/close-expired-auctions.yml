@@ -39,10 +39,23 @@ name: Close Expired Auctions
 #     the lazy on-request close still catches anything a browsing user touches.
 #   - GitHub disables scheduled workflows after ~60 days of repository
 #     inactivity. The job also has a manual trigger for that reason.
+#
+# COST NOTE (why the hours are restricted)
+#
+# Every run POSTs the API, and the close path queries Postgres - on Neon's
+# Launch plan that billing is compute-hours, and a 24/7 ping would keep the
+# compute awake all night paying for nothing. The schedule therefore runs only
+# during Indian business hours (04:00-17:00 UTC = 09:30-22:30 IST), when live
+# auctions actually happen, and lets the database suspend overnight. Overnight
+# expiries are still closed by the lazy on-request close the moment anyone -
+# staff or bidder - loads a page, and the daily 02:00 UTC Vercel cron backstop
+# drains anything that somehow sat untouched. If the business later needs
+# around-the-clock closing precision, widen the hours here and accept the
+# compute cost.
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/5 4-16 * * *'
   workflow_dispatch: {}
 
 # Never overlap runs.
