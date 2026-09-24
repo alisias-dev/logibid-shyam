@@ -53,5 +53,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck and build
+      # ORDER MATTERS: `npm test` builds first and typechecks second. On a clean
+      # checkout the typecheck alone cannot pass - api/index.ts imports the
+      # esbuild bundle at ../dist/app.cjs, dist/ is gitignored, so tsc fails with
+      # TS2307 before that bundle exists. Locally the problem is invisible
+      # because a previous build leaves dist/ behind.
+      - name: Build and typecheck
         run: npm test

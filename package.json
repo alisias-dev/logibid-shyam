@@ -9,7 +9,7 @@
     "start": "node dist/app.cjs",
     "clean": "rm -rf dist app.js",
     "lint": "tsc --noEmit",
-    "test": "npm run lint && npm run build",
+    "test": "npm run build && npm run lint",
     "backup": "node scripts/backup.mjs",
     "restore": "node scripts/restore.mjs"
   },
