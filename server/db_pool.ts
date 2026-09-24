@@ -276,6 +276,18 @@ export async function withTransaction<T>(
   const client = await getDbPool().connect();
   try {
     await client.query('BEGIN');
+    // COST GUARD (Neon scale-to-zero): a transaction left open - most plausibly
+    // by a hung socket or a stuck lock wait - is "idle-in-transaction", and
+    // Neon's compute lifecycle treats that as ACTIVE, so a single leaked
+    // transaction could keep the compute (and the bill) awake 24/7. These
+    // timeouts are transaction-scoped (SET LOCAL dies at COMMIT/ROLLBACK) and
+    // bound the damage: no single statement may run longer than 60s, and the
+    // transaction may not sit idle between statements for more than 30s. Both
+    // are far above legitimate timings for this workload (small diffs, indexed
+    // lookups) and the writeDB retry loop handles the resulting error like any
+    // other failure.
+    await client.query("SET LOCAL statement_timeout = '60s'");
+    await client.query("SET LOCAL idle_in_transaction_session_timeout = '30s'");
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
