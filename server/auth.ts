@@ -178,6 +178,11 @@ export async function rotateSession(
         'DELETE FROM sessions WHERE transporter_id = $1 OR user_id = $1',
         [payload.id]
       );
+      // Flush the read cache: the revoked tokens are still positively cached in
+      // app.ts's auth cache, which is consulted BEFORE any session lookup. Without
+      // this the theft response is not immediate - every cached token for this
+      // user keeps authorizing requests for the remainder of its TTL.
+      invalidateReadCache();
       return null;
     }
 
@@ -186,6 +191,7 @@ export async function rotateSession(
     // Check expiry
     if (new Date(session.expiry) < new Date()) {
       await queryPool('DELETE FROM sessions WHERE id = $1', [session.id]);
+      invalidateReadCache();
       return null;
     }
 

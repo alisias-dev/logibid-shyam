@@ -54,18 +54,29 @@ export default function RequirementDetail() {
   // Socket reference
   const socketRef = useRef<Socket | null>(null);
 
+  // Realtime transport.
+  //
+  // Socket.IO is treated as an ACCELERATOR only, not the source of truth. On
+  // serverless hosting the `/socket.io/` handshake is answered by the SPA
+  // catch-all rewrite (it returns index.html), so the connection can never be
+  // established. Previously that meant rank tables loaded ONCE on mount and then
+  // never changed - a bidder could sit on a bidding screen indefinitely without
+  // ever seeing a competitor's new bid, a rank change, or an award.
+  //
+  // The polling effect below is what actually guarantees freshness; the socket
+  // simply makes updates instant wherever the transport happens to work
+  // (local dev, self-hosted).
   useEffect(() => {
     loadRequirementAndRanks();
 
-    // Establish dynamic WebSocket connection. The server rejects unauthenticated
-    // socket handshakes. The HttpOnly accessToken cookie is attached to the
-    // same-origin handshake automatically, so no JS-readable token is passed.
     const socket = io(window.location.origin, {
-      withCredentials: true
+      withCredentials: true,
+      reconnectionAttempts: 3
     });
     socketRef.current = socket;
-    socket.on('connect_error', (err) => {
-      console.error('Socket connection failed:', err.message);
+    socket.on('connect_error', () => {
+      // Expected when the realtime endpoint is unreachable - the polling loop
+      // covers it, so stay quiet rather than logging on every retry attempt.
     });
 
     socket.emit('join_requirement', id);
@@ -79,6 +90,26 @@ export default function RequirementDetail() {
       socket.disconnect();
     };
   }, [id]);
+
+  // Fallback refresh loop - the guarantee that keeps bids, ranks and awards
+  // live. Runs only while the auction is OPEN, and stops automatically once the
+  // round reaches a terminal state (nothing can change after that). The silent
+  // refetch does not toggle the loading state, so it never causes a layout
+  // shift or a spinner flash.
+  useEffect(() => {
+    if (!requirement) return;
+    const isOpen =
+      requirement.status === 'LIVE' ||
+      requirement.status === 'active' ||
+      requirement.status === 'published';
+    if (!isOpen) return;
+
+    const interval = setInterval(() => {
+      loadRequirementAndRanks(true);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [requirement?.status, id]);
 
   async function loadRequirementAndRanks(silent = false) {
     if (!silent) setLoading(true);

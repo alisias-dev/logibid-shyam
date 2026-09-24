@@ -52,8 +52,16 @@ class ApiClient {
       );
     }
 
-    // If unauthorized, attempt a silent cookie-based token refresh once
-    if (response.status === 401 && path !== '/auth/refresh' && path !== '/auth/login-staff' && path !== '/auth/verify-otp') {
+    // If unauthorized, attempt a silent cookie-based token refresh once.
+    //
+    // Only attempt it when this browser believes a session may exist. For an
+    // anonymous visitor there is nothing to refresh, and trying cost two extra
+    // round-trips on EVERY page load (`/auth/me` 401, then `/auth/refresh` 400)
+    // for no benefit. The tokens themselves are HttpOnly, so this localStorage
+    // marker is only a hint that a refresh is worth attempting - it is never an
+    // authorization decision (the server still validates the session).
+    const mayHaveSession = !!localStorage.getItem('fleexbid_user');
+    if (response.status === 401 && mayHaveSession && path !== '/auth/refresh' && path !== '/auth/login-staff' && path !== '/auth/verify-otp') {
       const refreshed = await this.silentRefresh();
       if (refreshed) {
         // Retry the original request - the refreshed cookies are attached

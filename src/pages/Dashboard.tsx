@@ -55,11 +55,24 @@ export default function Dashboard() {
           const tieCount = reqs.filter((r: any) => r.status === 'TIE_RESOLUTION_REQUIRED').length;
           const closedCount = reqs.filter((r: any) => r.status === 'CLOSED').length;
 
-          // Compute savings (targetRate - awardAmount) if available
+          // Realised savings = (target rate - awarded amount) summed over every
+          // awarded requirement. This is the SAME definition the AI advisor uses
+          // (server/ai-router.ts), so the dashboard and the advisor can no longer
+          // report contradictory figures for one metric. This used to be
+          // hardcoded to 182400, which is why the dashboard and the advisor
+          // disagreed by more than 2x.
+          //
+          // NOTE: `awardedAmount`/`targetRate` arrive as strings (Postgres
+          // numeric), and absent values arrive as null/undefined - Number() plus
+          // isFinite() guards both without silently counting NaN.
           let totalSavings = 0;
-          try {
-            const dbData = await api.get('/transporters'); // view transporters list just for connection test
-          } catch {}
+          for (const r of reqs) {
+            const awarded = Number(r.awardedAmount);
+            const target = Number(r.targetRate);
+            if (Number.isFinite(awarded) && awarded > 0 && Number.isFinite(target) && target > 0) {
+              totalSavings += Math.max(0, target - awarded);
+            }
+          }
 
           setMetrics({
             live: liveCount,
@@ -67,7 +80,9 @@ export default function Dashboard() {
             draft: draftCount,
             tieCount: tieCount,
             closed: closedCount,
-            savings: 182400, // mock robust savings
+            savings: totalSavings,
+            // PLACEHOLDER: average bids per round needs a per-requirement bid
+            // count, which /api/requirements does not return yet.
             avgParticipation: 4.2
           });
 

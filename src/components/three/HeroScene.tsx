@@ -120,10 +120,22 @@ export default function HeroScene() {
     <Canvas
       className="fixed inset-0"
       style={{ position: 'fixed', inset: 0, zIndex: 0 }}
-      dpr={[1, 1.75]}
+      dpr={[1, 1.5]}
       camera={{ position: [0, 0.4, 6.5], fov: 42 }}
-      gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+      gl={{ antialias: true, alpha: false, powerPreference: 'default' }}
       resize={{ scroll: false }}
+      onCreated={({ gl }) => {
+        // Without preventDefault() the browser will not attempt to restore a
+        // lost WebGL context, so the canvas stays permanently dead: the console
+        // shows "THREE.WebGLRenderer: Context Lost" and the hero becomes a
+        // frozen black rectangle. Calling preventDefault asks the UA to restore
+        // it, and R3F re-initialises the scene instead of leaving a broken page.
+        //
+        // The renderer is also less aggressive now (dpr capped at 1.5, default
+        // power preference): 'high-performance' could force a GPU switch on
+        // laptops, which is itself a common cause of context loss.
+        gl.domElement.addEventListener('webglcontextlost', (event) => event.preventDefault(), false);
+      }}
     >
       <color attach="background" args={['#020617']} />
       <fog attach="fog" args={['#020617', 9, 22]} />

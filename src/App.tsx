@@ -24,7 +24,10 @@ function Layout({ children }: { children: React.ReactNode }) {
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
       
       {/* Main content wrapper */}
-      <div className="flex-1 lg:pl-64 flex flex-col min-h-screen">
+      {/* min-w-0 is load-bearing: a flex child defaults to min-width:auto, so
+          without it this column refuses to shrink below its content's minimum
+          width and overflows the viewport on narrow screens. */}
+      <div className="flex-1 min-w-0 lg:pl-64 flex flex-col min-h-screen">
         {/* Mobile Header Bar */}
         <header className="lg:hidden h-16 flex items-center justify-between px-6 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shrink-0">
           <div className="flex items-center gap-3">

@@ -1,0 +1,83 @@
+name: Close Expired Auctions
+
+# WHY THIS EXISTS
+#
+# FleexBid's auction closer is a 10-second `setInterval`, but that loop is
+# deliberately skipped on serverless hosting (`if (!process.env.VERCEL)`), which
+# leaves only a LAZY close that runs when someone happens to load a requirements
+# page. An auction whose clock ran out while nobody was browsing therefore stayed
+# LIVE indefinitely - and because realtime push is unavailable on that platform,
+# no client was ever told it had closed. The 10-second countdown users see is
+# purely cosmetic.
+#
+# This scheduler drains the expired queue on time, independent of user traffic.
+# It runs on GitHub Actions rather than Vercel Cron so it works on ANY Vercel
+# plan - Vercel's Hobby tier only permits DAILY cron jobs, which is useless for
+# auctions measured in seconds. On Vercel Pro you can additionally add to
+# vercel.json:
+#
+#   "crons": [{ "path": "/api/cron/close-expired", "schedule": "*/1 * * * *" }]
+#
+# (Vercel sends CRON_SECRET automatically as a bearer token when that env var is
+# configured on the project, so the endpoint needs no changes to accept it.)
+#
+# The endpoint is idempotent and exactly-once: closing takes a per-auction lock
+# and re-checks `status === 'LIVE'` against the fresh committed snapshot, so
+# overlapping triggers can never double-award.
+#
+# REQUIRED SETUP
+#
+#   Repository secret CRON_SECRET (Settings > Secrets and variables > Actions)
+#   must match the CRON_SECRET environment variable set on the Vercel project.
+#   Without it the endpoint fails CLOSED and this job reports 401/403.
+#
+# CAVEATS
+#
+#   - GitHub's minimum schedule is every 5 minutes, and scheduled runs can be
+#     delayed under load. This bounds lateness to minutes instead of "forever";
+#     the lazy on-request close still catches anything a browsing user touches.
+#   - GitHub disables scheduled workflows after ~60 days of repository
+#     inactivity. The job also has a manual trigger for that reason.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+# Never overlap runs.
+concurrency:
+  group: close-expired-auctions
+  cancel-in-progress: false
+
+jobs:
+  close-expired:
+    name: Trigger expired-auction drain
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Call /api/cron/close-expired
+        shell: bash
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SITE_URL: https://www.fleexbid.live
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET repository secret is not set - refusing to call the endpoint."
+            exit 1
+          fi
+
+          code=$(curl -sS --max-time 60 -o /tmp/body -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H 'Content-Type: application/json' \
+            "$SITE_URL/api/cron/close-expired" || echo "000")
+
+          echo "HTTP $code"
+          cat /tmp/body || true
+          echo
+
+          if [ "$code" != "200" ]; then
+            echo "::error::close-expired returned $code"
+            exit 1
+          fi

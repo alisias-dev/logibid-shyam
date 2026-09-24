@@ -38,7 +38,7 @@ router.use((req, res, next) => {
  */
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY!;
-  return new GoogleGenAI({
+  const client = new GoogleGenAI({
     apiKey,
     httpOptions: {
       headers: {
@@ -46,50 +46,98 @@ function getGeminiClient(): GoogleGenAI {
       },
     },
   });
+
+  // Apply the timeout ONCE, here, rather than at every call site - so any
+  // current or future model call is automatically bounded.
+  const generate = client.models.generateContent.bind(client.models);
+  client.models.generateContent = ((...args: any[]) =>
+    withTimeout(generate(...args), 'Gemini generateContent')) as typeof client.models.generateContent;
+
+  return client;
+}
+
+/**
+ * Hard ceiling on a single Gemini call.
+ *
+ * Previously there was NO timeout anywhere in this router: if the upstream model
+ * stalled, the request simply hung until the hosting platform killed the
+ * function. The caller got an opaque gateway error (or a spinner forever)
+ * instead of a clean, retryable message.
+ */
+const AI_TIMEOUT_MS = 25000;
+
+class AiTimeoutError extends Error {
+  constructor(label: string) {
+    super(`${label} did not respond within ${AI_TIMEOUT_MS}ms`);
+    this.name = 'AiTimeoutError';
+  }
+}
+
+/** Rejects if the wrapped promise has not settled within AI_TIMEOUT_MS. */
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new AiTimeoutError(label)), AI_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+/** Standard failure response for an AI route, distinguishing a stall from a fault. */
+function aiErrorResponse(res: express.Response, label: string, error: any, fallback: string) {
+  console.error(`${label} error:`, error);
+  if (error instanceof AiTimeoutError) {
+    return res.status(504).json({
+      error: 'The AI advisor took too long to respond. Please try again.',
+      details: `Upstream model exceeded ${AI_TIMEOUT_MS}ms.`,
+    });
+  }
+  return res.status(500).json({ error: fallback, details: error.message });
 }
 
 /**
  * Helper to build general platform context for Gemini system prompts
  */
 async function getPlatformContext() {
-  const transportersRes = await queryPool("SELECT count(*) FROM transporters WHERE status = 'ACTIVE'");
-  const transporterCount = parseInt(transportersRes.rows[0].count, 10);
-
-  const reqsRes = await queryPool('SELECT id, target_rate, status FROM requirements');
-  const requirements = reqsRes.rows;
-
-  const activeReqs = requirements.filter(r => r.status === 'LIVE').length;
-  const awardedReqs = requirements.filter(r => r.status === 'AWARDED' || r.status === 'CLOSED').length;
-
-  const bidsRes = await queryPool('SELECT requirement_id, amount FROM bids');
-  const bids = bidsRes.rows;
-
-  const awardsRes = await queryPool('SELECT requirement_id, amount FROM awards');
-  const awards = awardsRes.rows;
-
-  // Calculate simulated savings
-  let totalSavings = 0;
-  requirements.forEach(req => {
-    if (req.targetRate) {
-      const award = awards.find(a => a.requirementId === req.id);
-      if (award) {
-        totalSavings += Math.max(0, Number(req.targetRate) - Number(award.amount));
-      } else {
-        const reqBids = bids.filter(b => b.requirementId === req.id);
-        if (reqBids.length > 0) {
-          const lowestBid = Math.min(...reqBids.map(b => Number(b.amount)));
-          totalSavings += Math.max(0, Number(req.targetRate) - lowestBid);
-        }
-      }
-    }
-  });
+  // Bounded, aggregate-only queries.
+  //
+  // The previous implementation pulled EVERY requirements/bids/awards row into
+  // JavaScript on every AI request - cost grew with total platform history - and
+  // it never filtered soft-deleted rows, so the savings figure it reported
+  // disagreed with the dashboard's. Savings now has ONE definition, computed in
+  // SQL from realised awards, so advisors and dashboards cannot contradict each
+  // other.
+  const [transportersRes, reqsRes, awardsRes] = await Promise.all([
+    queryPool("SELECT count(*)::int AS c FROM transporters WHERE status = 'ACTIVE' AND is_deleted = FALSE"),
+    queryPool(`
+      SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE status = 'LIVE')::int AS live,
+        count(*) FILTER (WHERE status IN ('AWARDED', 'CLOSED'))::int AS awarded
+      FROM requirements
+      WHERE is_deleted = FALSE
+    `),
+    queryPool(`
+      SELECT COALESCE(SUM(GREATEST(0, r.target_rate - a.amount)), 0)::int AS savings
+      FROM awards a
+      JOIN requirements r ON r.id = a.requirement_id
+      WHERE r.is_deleted = FALSE AND r.target_rate IS NOT NULL
+    `),
+  ]);
 
   return {
-    transporterCount,
-    requirementsCount: requirements.length,
-    activeReqs,
-    awardedReqs,
-    totalSavings,
+    transporterCount: transportersRes.rows[0]?.c ?? 0,
+    requirementsCount: reqsRes.rows[0]?.total ?? 0,
+    activeReqs: reqsRes.rows[0]?.live ?? 0,
+    awardedReqs: reqsRes.rows[0]?.awarded ?? 0,
+    totalSavings: awardsRes.rows[0]?.savings ?? 0,
   };
 }
 
@@ -109,7 +157,12 @@ router.post('/chat', async (req, res) => {
     const stats = await getPlatformContext();
     
     // Fetch active transporters for AI prompt context using snake_case columns
-    const transportersRes = await queryPool('SELECT company_name, vehicle_types, operating_states FROM transporters WHERE status = $1', ['ACTIVE']);
+    // Bounded prompt context: the whole ACTIVE roster (hundreds of carriers) was
+    // being serialised into every chat request, inflating latency and token cost.
+    const transportersRes = await queryPool(
+      'SELECT company_name, vehicle_types, operating_states FROM transporters WHERE status = $1 AND is_deleted = FALSE ORDER BY company_name LIMIT 50',
+      ['ACTIVE']
+    );
     const transportersList = transportersRes.rows;
 
     const formattedContents = messages.map((m: any) => ({
@@ -140,6 +193,9 @@ Always provide highly professional, concise, actionable, and data-driven respons
 
     return res.json({ text: response.text });
   } catch (error: any) {
+    if (error instanceof AiTimeoutError) {
+      return aiErrorResponse(res, 'Gemini chat', error, 'AI is temporarily unavailable.');
+    }
     console.error('Gemini chat error:', error);
     return res.status(500).json({ 
       error: 'AI is temporarily unavailable.', 
@@ -224,6 +280,9 @@ Analyze historical and realistic Indian logistics parameters to supply pricing g
     const data = JSON.parse(response.text?.trim() || '{}');
     return res.json(data);
   } catch (error: any) {
+    if (error instanceof AiTimeoutError) {
+      return aiErrorResponse(res, 'Gemini rate prediction', error, 'Failed to predict rates.');
+    }
     console.error('Gemini rate prediction error:', error);
     return res.status(500).json({ 
       error: 'Failed to predict rates.', 
@@ -252,7 +311,10 @@ router.post('/match-transporters', authorizeRoles(['SUPER_ADMIN', 'LOGISTICS']),
       return res.status(404).json({ error: 'Requirement not found.' });
     }
 
-    const transportersRes = await queryPool('SELECT id, company_name, preferred_routes, operating_states, vehicle_types FROM transporters WHERE status = $1', ['ACTIVE']);
+    const transportersRes = await queryPool(
+      'SELECT id, company_name, preferred_routes, operating_states, vehicle_types FROM transporters WHERE status = $1 AND is_deleted = FALSE ORDER BY company_name LIMIT 50',
+      ['ACTIVE']
+    );
     const transportersContext = transportersRes.rows.map(t => ({
       id: t.id,
       companyName: t.companyName,
@@ -317,6 +379,9 @@ Produce a ranked matching list. Each match must contain a percentage match score
     const data = JSON.parse(response.text?.trim() || '{}');
     return res.json(data);
   } catch (error: any) {
+    if (error instanceof AiTimeoutError) {
+      return aiErrorResponse(res, 'Gemini transporter match', error, 'Failed to generate matches.');
+    }
     console.error('Gemini transporter match error:', error);
     return res.status(500).json({ 
       error: 'Failed to generate matches.', 
@@ -353,17 +418,20 @@ router.post('/negotiator', authorizeRoles(['SUPER_ADMIN', 'LOGISTICS']), async (
     }
 
     // Build ranking context
-    const bidRanks: any[] = [];
-    for (const b of reqBids) {
-      const transRes = await queryPool('SELECT company_name FROM transporters WHERE id = $1', [b.transporterId]);
-      const trans = transRes.rows[0];
-      bidRanks.push({
+    // One query for all bidders instead of one query PER bid (the previous N+1).
+    const bidderIds = Array.from(new Set(reqBids.map((b: any) => b.transporterId)));
+    const bidderRes = bidderIds.length
+      ? await queryPool('SELECT id, company_name FROM transporters WHERE id = ANY($1)', [bidderIds])
+      : { rows: [] as any[] };
+    const nameById = new Map(bidderRes.rows.map((t: any) => [t.id, t.companyName]));
+
+    const bidRanks: any[] = reqBids
+      .map((b: any) => ({
         transporterId: b.transporterId,
-        companyName: trans ? trans.companyName : 'Unknown Transporter',
+        companyName: nameById.get(b.transporterId) || 'Unknown Transporter',
         amount: Number(b.amount),
-      });
-    }
-    bidRanks.sort((a, b) => a.amount - b.amount);
+      }))
+      .sort((a, b) => a.amount - b.amount);
 
     const lowestBidAmount = bidRanks[0].amount;
     const targetRate = requirement.targetRate ? Number(requirement.targetRate) : Math.round(lowestBidAmount * 0.95);
@@ -414,6 +482,9 @@ Provide a structured list of custom negotiation drafts. Offer L1 bidder a volume
     const data = JSON.parse(response.text?.trim() || '{}');
     return res.json(data);
   } catch (error: any) {
+    if (error instanceof AiTimeoutError) {
+      return aiErrorResponse(res, 'Gemini negotiator', error, 'Failed to generate negotiator strategies.');
+    }
     console.error('Gemini negotiator error:', error);
     return res.status(500).json({ 
       error: 'Failed to generate negotiator strategies.', 

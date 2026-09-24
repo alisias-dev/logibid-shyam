@@ -1,3 +1,7 @@
+// Loads .env.local BEFORE any other module is evaluated (see file comment).
+// Must stay the first import in this file.
+import './server/load-env';
+
 import express from 'express';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
@@ -36,7 +40,8 @@ import {
   getAuditLogsPage,
   getNotificationLogs,
   getExpiredLiveRequirements,
-  cleanupExpiredSessions
+  cleanupExpiredSessions,
+  invalidateReadCache
 } from './server/db';
 import { queryPool, getPoolInfo } from './server/db_pool';
 import { dbRateLimiter } from './server/rate-limit';
@@ -525,7 +530,9 @@ async function authenticate(req: express.Request, res: express.Response, next: e
       if (statusLower === 'blocked') {
         // Invalidate active sessions for the blocked user directly in the database
         await queryPool('DELETE FROM sessions WHERE user_id = $1', [decoded.id]);
-        authCache.delete(token);
+        // Drop EVERY cached token for this user - clearing only the presented
+        // token would leave their other devices authorized.
+        authCache.clear();
         return res.status(403).json({ error: "Access Denied: Your account is blocked. Please contact the administrator." });
       }
       
@@ -548,7 +555,8 @@ async function authenticate(req: express.Request, res: express.Response, next: e
       if (statusLower === 'blocked' || statusLower === 'inactive') {
         // Invalidate active sessions for blocked transporter directly in the database
         await queryPool('DELETE FROM sessions WHERE transporter_id = $1', [decoded.id]);
-        authCache.delete(token);
+        // Drop EVERY cached token for this transporter, not just this one.
+        authCache.clear();
         return res.status(403).json({ error: "Access Denied: Your account is blocked. Please contact the administrator." });
       }
       
@@ -918,7 +926,10 @@ app.post('/api/auth/login-staff', loginLimiter, async (req, res) => {
     res.cookie('accessToken', accessToken, getCookieOptions(req, 15 * 60 * 1000));
     res.cookie('refreshToken', refreshToken, getCookieOptions(req, 90 * 24 * 60 * 60 * 1000));
 
-    await logAudit(user.id, user.email, user.role, 'STAFF_LOGIN_SUCCESS', req);
+    // Audit log must never block login - catch failures so the
+    // session/cookies already set above are not lost.
+    logAudit(user.id, user.email, user.role, 'STAFF_LOGIN_SUCCESS', req)
+      .catch((auditErr) => console.error('Audit log failed (login still succeeded):', auditErr));
 
     // Tokens are ONLY issued as HttpOnly cookies - never returned in the JSON
     // body, so page JavaScript cannot read or exfiltrate them.
@@ -985,7 +996,10 @@ app.post('/api/auth/login-transporter', loginLimiter, async (req, res) => {
     res.cookie('accessToken', accessToken, getCookieOptions(req, 15 * 60 * 1000));
     res.cookie('refreshToken', refreshToken, getCookieOptions(req, 90 * 24 * 60 * 60 * 1000));
 
-    await logAudit(transporter.id, transporter.email, 'TRANSPORTER', 'TRANSPORTER_LOGIN_SUCCESS', req);
+    // Audit log must never block login - catch failures so the
+    // session/cookies already set above are not lost.
+    logAudit(transporter.id, transporter.email, 'TRANSPORTER', 'TRANSPORTER_LOGIN_SUCCESS', req)
+      .catch((auditErr) => console.error('Audit log failed (login still succeeded):', auditErr));
 
     // Tokens are ONLY issued as HttpOnly cookies - never returned in the JSON
     // body, so page JavaScript cannot read or exfiltrate them.
@@ -1437,8 +1451,12 @@ app.get('/api/requirements', authenticate, requirementsLimiter, async (req, res)
     const hideWinner = role === 'TRANSPORTER' && award && award.transporterId !== req.user!.id;
     return {
       ...r,
+      // CONFIDENTIALITY: the winner's PRICE is exactly as sensitive as the
+      // winner's identity. Masking only `awardedTransporterId` still leaked the
+      // clearing price to every losing bidder - the one number they must never
+      // see. Both fields now follow the same rule.
       awardedTransporterId: award && !hideWinner ? award.transporterId : null,
-      awardedAmount: award ? award.amount : null
+      awardedAmount: award && !hideWinner ? award.amount : null
     };
   };
 
@@ -1506,8 +1524,10 @@ app.get('/api/requirements/:id', authenticate, requirementsLimiter, async (req, 
   const hideWinner = req.user!.role === 'TRANSPORTER' && award && award.transporterId !== req.user!.id;
   const requirementWithAward = {
     ...reqItem,
+    // Same confidentiality rule as the list endpoint: a transporter who did not
+    // win must not learn the winning amount either.
     awardedTransporterId: award && !hideWinner ? award.transporterId : null,
-    awardedAmount: award ? award.amount : null
+    awardedAmount: award && !hideWinner ? award.amount : null
   };
 
   return res.json({ 
@@ -2368,7 +2388,9 @@ app.get('/api/sessions', authenticate, async (req, res) => {
   const sessions = await getSessionsForUser(req.user!.id, req.user!.role);
   // never leak refresh-token material
   const filtered = sessions.map(({ refreshToken, ...session }) => session);
-  return res.json({ sessions: filtered });
+  // getSessionsForUser is newest-first; cap the page so a device-heavy account
+  // (or a long-lived one) cannot return an unbounded payload.
+  return res.json({ sessions: filtered.slice(0, 50), total: filtered.length });
 });
 
 /**
@@ -2379,10 +2401,22 @@ app.delete('/api/sessions/:id', authenticate, async (req, res) => {
   const { id } = req.params;
 
   try {
-    if (req.user!.role === 'TRANSPORTER') {
-      await queryPool('DELETE FROM sessions WHERE id = $1 AND transporter_id = $2', [id, req.user!.id]);
-    } else {
-      await queryPool('DELETE FROM sessions WHERE id = $1 AND user_id = $2', [id, req.user!.id]);
+    // Scoped delete: the WHERE clause carries the ownership check, so a foreign
+    // session id simply matches nothing.
+    const result = req.user!.role === 'TRANSPORTER'
+      ? await queryPool('DELETE FROM sessions WHERE id = $1 AND transporter_id = $2', [id, req.user!.id])
+      : await queryPool('DELETE FROM sessions WHERE id = $1 AND user_id = $2', [id, req.user!.id]);
+
+    // CRITICAL: the access-token cache is a POSITIVE cache consulted BEFORE any
+    // session lookup, so without this flush a revoked token keeps authorizing
+    // requests until the entry expires (~15s). `revokeSession()` (logout) already
+    // flushes via invalidateReadCache - this path must too, otherwise revocation
+    // is silently delayed for everything except logout.
+    invalidateReadCache();
+
+    if (!result.rowCount) {
+      // Report honestly instead of claiming a revocation that never happened.
+      return res.status(404).json({ error: 'Session not found' });
     }
 
     await logAudit(req.user!.id, req.user!.email, req.user!.role, `REVOKE_SESSION: Session ${id}`, req);
@@ -2391,6 +2425,76 @@ app.delete('/api/sessions/:id', authenticate, async (req, res) => {
     return res.status(500).json({ error: 'Failed to revoke session', detail: error.message });
   }
 });
+
+// ==========================================
+// DETERMINISTIC AUCTION CLOSING (serverless)
+// ==========================================
+
+/**
+ * Constant-time string comparison - the cron secret must not be discoverable
+ * through a timing oracle.
+ */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * Authorizes the close-expired trigger: either the shared CRON_SECRET as a
+ * bearer token (what Vercel Cron and any external scheduler send), or a
+ * signed-in SUPER_ADMIN session. Fails CLOSED if neither is satisfied.
+ */
+const cronAuthorized: express.RequestHandler = (req, res, next) => {
+  const secret = process.env.CRON_SECRET;
+  const presented = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+
+  if (secret && presented && safeEqual(presented, secret)) return next();
+
+  if (!secret) {
+    console.warn(
+      '[cron] CRON_SECRET is not set - /api/cron/close-expired only accepts an admin session. ' +
+        'Set CRON_SECRET to let an external scheduler trigger it.'
+    );
+  }
+
+  return authenticate(req, res, () => {
+    if (req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions' });
+    }
+    next();
+  });
+};
+
+/**
+ * Drains auctions whose closing time has passed. Idempotent and exactly-once -
+ * the close path takes a per-auction lock and re-checks `status === 'LIVE'
+ * against the fresh committed snapshot, so concurrent triggers cannot double
+ * award. Safe to call as often as you like.
+ */
+const closeExpiredHandler: express.RequestHandler = async (_req, res) => {
+  try {
+    await maybeAutoCloseExpired();
+    return res.json({ success: true, ranAt: new Date().toISOString() });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Close-expired run failed', detail: error.message });
+  }
+};
+
+/**
+ * GET/POST /api/cron/close-expired
+ *
+ * WHY THIS EXISTS: on serverless (Vercel) the 10-second `setInterval` is skipped
+ * by design (`if (!process.env.VERCEL)`), so expiring auctions were only closed
+ * LAZILY, whenever someone happened to load a requirements page. An auction
+ * whose clock ran out while nobody was browsing stayed LIVE indefinitely - and
+ * because realtime push is unavailable on this platform, no client was ever
+ * told it had closed. This endpoint lets an external scheduler close auctions
+ * ON TIME, independent of user traffic.
+ */
+app.get('/api/cron/close-expired', cronAuthorized, closeExpiredHandler);
+app.post('/api/cron/close-expired', cronAuthorized, closeExpiredHandler);
 
 /**
  * AI Advisory & Insights endpoints

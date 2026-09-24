@@ -10,6 +10,35 @@ interface AuthUser {
   status?: string;
 }
 
+/**
+ * Non-authoritative hint that this browser may hold a session.
+ *
+ * Tokens live ONLY in HttpOnly cookies, so JS cannot inspect them. `api.ts`
+ * consults this marker to decide whether a silent token refresh is worth
+ * attempting on a 401: without it, every anonymous page load paid two extra
+ * round-trips (`/auth/me` 401 followed by an inevitable `/auth/refresh` 400).
+ * It is a UX optimisation only - the server always re-validates the session, so
+ * a stale or forged marker grants nothing.
+ */
+const SESSION_HINT_KEY = 'fleexbid_user';
+
+function markSessionHint(user: unknown) {
+  try {
+    localStorage.setItem(SESSION_HINT_KEY, JSON.stringify(user));
+  } catch {
+    // Storage can be unavailable (private mode / quota) - refresh just falls
+    // back to being attempted, which is the safe direction.
+  }
+}
+
+function clearSessionHint() {
+  try {
+    localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
@@ -30,11 +59,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await api.get('/auth/me');
       if (data.user) {
         setUser(data.user);
+        markSessionHint(data.user);
       } else {
         setUser(null);
+        clearSessionHint();
       }
     } catch {
       setUser(null);
+      clearSessionHint();
     } finally {
       setLoading(false);
     }
@@ -48,6 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const data = await api.post('/auth/login-staff', { email, password });
     if (data.user) {
       setUser(data.user);
+      markSessionHint(data.user);
     }
   };
 
@@ -55,6 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const data = await api.post('/auth/login-transporter', { email, password });
     if (data.user) {
       setUser(data.user);
+      markSessionHint(data.user);
     }
   };
 
@@ -67,9 +101,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setUser(null);
       // Tokens live in HttpOnly cookies which the SERVER clears on logout
-      // (JS cannot read or delete HttpOnly cookies). Only user metadata is
-      // cleared locally.
-      localStorage.removeItem('fleexbid_user');
+      // (JS cannot read or delete HttpOnly cookies). Only the local session
+      // hint is cleared here.
+      clearSessionHint();
     }
   };
 
