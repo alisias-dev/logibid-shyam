@@ -22,6 +22,7 @@ import {
   Send
 } from 'lucide-react';
 import ExportAwardPdfButton from '../components/OfficialAwardPdf';
+import { parseAsIst, formatIstLabel } from '../lib/istTime';
 
 // Same base the API client uses, so the stream URL follows any deployment that
 // points the frontend at a separate API origin.
@@ -191,7 +192,9 @@ export default function RequirementDetail() {
 
     const interval = setInterval(() => {
       const now = new Date().getTime();
-      const end = new Date(requirement.bidClosingTime).getTime();
+      // Closing times are entered in IST; parseAsIst normalizes both legacy
+      // naive strings and proper ISO instants to the correct UTC moment.
+      const end = parseAsIst(requirement.bidClosingTime).getTime();
       const diff = end - now;
 
       if (diff <= 0) {
@@ -236,23 +239,13 @@ export default function RequirementDetail() {
     }
   };
 
-  // Handle Manual Tie Resolution Award
+  // Handle Manual Award — staff may award to ANY quoted transporter on the
+  // board (any rank, tied or untied). The resolution note is optional.
   const handleAward = (transporterId: string) => {
-    const l1Bids = ranks.filter(r => r.isL1 && r.amount !== null);
-    const isTie = l1Bids.length > 1;
-
-    if (isTie && !tieBreakLog) {
-      setError('A manual tie-break explanation is required to resolve tied L1 bidders.');
-      return;
-    }
-
     setConfirmAwardId(transporterId);
   };
 
   const executeAward = async (transporterId: string) => {
-    const l1Bids = ranks.filter(r => r.isL1 && r.amount !== null);
-    const isTie = l1Bids.length > 1;
-
     setConfirmAwardId(null);
     setSubmitting(true);
     setError(null);
@@ -261,7 +254,7 @@ export default function RequirementDetail() {
     try {
       await api.post(`/requirements/${id}/award`, {
         transporterId,
-        tieBreakLog: isTie ? tieBreakLog : 'Manual selection'
+        tieBreakLog: tieBreakLog.trim() || 'Manual discretionary award'
       });
       setSuccess('Contract awarded successfully! Participating transporters have been notified.');
       setTieBreakLog('');
@@ -604,6 +597,12 @@ export default function RequirementDetail() {
               }
             </div>
 
+            {requirement.status === 'LIVE' && requirement.bidClosingTime && (
+              <div className="text-[10px] font-mono text-slate-400 mt-1">
+                Closes: {formatIstLabel(requirement.bidClosingTime)}
+              </div>
+            )}
+
             <div className={`text-2xl font-bold font-mono tracking-widest mt-2 py-1 select-none ${
               requirement.status === 'AWARDED' ? 'text-emerald-400 animate-bounce' :
               requirement.status === 'CLOSED' ? 'text-amber-400' :
@@ -698,8 +697,10 @@ export default function RequirementDetail() {
             </div>
           )}
 
-          {/* TIE BREAK EXPLANATION CARD (Staff only) */}
-          {user?.role !== 'TRANSPORTER' && isL1Tie && (requirement.status === 'CLOSED' || requirement.status === 'TIE_RESOLUTION_REQUIRED') && (
+          {/* TIE BREAK EXPLANATION CARD (Staff only) — also shown while the
+              auction is LIVE so staff can attach a discretionary note when
+              awarding early from a tied or non-L1 bidder. */}
+          {user?.role !== 'TRANSPORTER' && isL1Tie && (requirement.status === 'CLOSED' || requirement.status === 'TIE_RESOLUTION_REQUIRED' || requirement.status === 'LIVE') && (
             <div className="bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/30 rounded-2xl p-6 shadow-sm space-y-4">
               <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
                 <AlertTriangle className="w-5 h-5 shrink-0 animate-bounce" />
@@ -709,12 +710,12 @@ export default function RequirementDetail() {
               </div>
 
               <p className="text-xs text-rose-600 dark:text-rose-400 leading-relaxed">
-                Multiple carriers have tied at the lowest freight quotation. Standard auto-award is paused. A Logistics team explanation is mandatory to resolve.
+                Multiple carriers have tied at the lowest freight quotation. You may award to any carrier you choose — the explanation below is optional and defaults to a discretionary award note.
               </p>
 
               <div>
                 <label className="block text-[10px] font-bold text-rose-500 uppercase tracking-wider mb-1.5">
-                  Resolution Decision Note *
+                  Resolution Decision Note (Optional)
                 </label>
                 <textarea
                   required

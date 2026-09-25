@@ -87,6 +87,26 @@ import {
 } from './src/types';
 import aiRouter from './server/ai-router';
 
+/**
+ * Interpret a client-supplied closing time as an exact UTC instant.
+ *
+ * The create/extend forms use <input type="datetime-local">, which yields a
+ * naive "YYYY-MM-DDTHH:mm" wall-clock string. Staff enter IST, so a naive
+ * value must be shifted +05:30 to get the true instant; storing it literally
+ * as UTC skews the countdown and auto-close by 5h30m. Values that already
+ * carry an offset (ISO with Z / ±hh:mm) are authoritative and pass through.
+ */
+function parseClosingTimeAsInstant(input: string | Date): Date {
+  if (input instanceof Date) return isNaN(input.getTime()) ? new Date(NaN) : input;
+  const s = (input || '').trim();
+  if (!s) return new Date(NaN);
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+    return new Date(s);
+  }
+  const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s) ? `${s}:00` : s;
+  return new Date(`${withSeconds}+05:30`);
+}
+
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -1754,7 +1774,7 @@ app.post('/api/requirements', authenticate, authorize(['SUPER_ADMIN', 'LOGISTICS
     if (r.vehicleType && !VEHICLE_TYPES.includes(r.vehicleType)) {
       errors.push(`Row ${idx + 1}: vehicleType must be one of the standardized types: ${VEHICLE_TYPES.join(', ')}.`);
     }
-    const closing = new Date(r.bidClosingTime);
+    const closing = parseClosingTimeAsInstant(r.bidClosingTime);
     if (isNaN(closing.getTime()) || closing <= new Date()) {
       errors.push(`Row ${idx + 1}: Bid Closing Time must be a valid future datetime.`);
     }
@@ -1814,7 +1834,7 @@ app.post('/api/requirements', authenticate, authorize(['SUPER_ADMIN', 'LOGISTICS
           vehicleSpecs: r.vehicleSpecs || '',
           documents: r.documents || [],
           bidOpeningTime: new Date().toISOString(),
-          bidClosingTime: new Date(r.bidClosingTime).toISOString(),
+          bidClosingTime: parseClosingTimeAsInstant(r.bidClosingTime).toISOString(),
           targetRate: r.targetRate ? Number(r.targetRate) : null,
           awardType: r.awardType || 'MANUAL',
           status: 'DRAFT', // Always created as draft first
@@ -1904,6 +1924,13 @@ app.put('/api/requirements/:id', authenticate, authorize(['SUPER_ADMIN', 'LOGIST
     for (const field of editableFields) {
       if (field in updateData) {
         updated[field] = updateData[field];
+      }
+    }
+    // Naive datetime-local edits are entered in IST - store the true instant.
+    if (typeof updated.bidClosingTime === 'string' && updated.bidClosingTime) {
+      const parsed = parseClosingTimeAsInstant(updated.bidClosingTime);
+      if (!isNaN(parsed.getTime())) {
+        updated.bidClosingTime = parsed.toISOString();
       }
     }
 
@@ -2022,7 +2049,9 @@ app.put('/api/requirements/:id/extend', authenticate, authorize(['SUPER_ADMIN', 
   const { id } = req.params;
   const { newClosingTime } = req.body;
 
-  if (!newClosingTime || isNaN(new Date(newClosingTime).getTime()) || new Date(newClosingTime) <= new Date()) {
+  const candidate = parseClosingTimeAsInstant(newClosingTime);
+
+  if (!newClosingTime || isNaN(candidate.getTime()) || candidate <= new Date()) {
     return res.status(400).json({ error: 'Valid future closing time is required' });
   }
 
@@ -2043,7 +2072,7 @@ app.put('/api/requirements/:id/extend', authenticate, authorize(['SUPER_ADMIN', 
       // cancelled by another request while we waited for the write lock.
       if (!r || r.status === 'AWARDED' || r.status === 'CANCELLED') return;
       r.status = 'LIVE'; // Ensure it becomes LIVE again if it was closed
-      r.bidClosingTime = new Date(newClosingTime).toISOString();
+      r.bidClosingTime = candidate.toISOString();
     }, {
       lockKeys: [`auction:${id}`],
       lockRequirementIds: [id],
@@ -2341,7 +2370,10 @@ app.post('/api/requirements/:id/bid', authenticate, biddingLimiter, authorize(['
 
 /**
  * POST /api/requirements/:id/award
- * Manually awards requirement (Staff only). Resolves ties.
+ * Manually awards requirement (Staff only). Staff may award to ANY quoted
+ * transporter on the board — any rank, tied or untied — at their discretion.
+ * The resolution note is OPTIONAL: when omitted, a default discretionary
+ * note is recorded for the audit trail.
  */
 app.post('/api/requirements/:id/award', authenticate, authorize(['SUPER_ADMIN', 'LOGISTICS']), async (req, res) => {
   const { id } = req.params;
@@ -2360,14 +2392,11 @@ app.post('/api/requirements/:id/award', authenticate, authorize(['SUPER_ADMIN', 
       return res.status(400).json({ error: 'Requirement is not in a contractible state' });
     }
 
-    // Check if selecting from a tie
-    const ranks = await calculateRanks(id);
-    const l1Bids = ranks.filter(r => r.isL1 && r.amount !== null);
-    const isTie = l1Bids.length > 1;
-
-    if (isTie && !tieBreakLog) {
-      return res.status(400).json({ error: 'A manual resolution explanation is required to award a tied L1 bid' });
-    }
+    // Discretionary award: any quoted bidder is eligible. The explanation is
+    // optional — default it so the audit trail always records a justification.
+    const resolutionNote = (typeof tieBreakLog === 'string' && tieBreakLog.trim())
+      ? tieBreakLog.trim()
+      : 'Manual discretionary award';
 
     const selectedBid = await getBidFor(id, transporterId);
     if (!selectedBid) {
@@ -2396,7 +2425,7 @@ app.post('/api/requirements/:id/award', authenticate, authorize(['SUPER_ADMIN', 
         amount: selectedBid.amount,
         awardedAt: nowStr,
         awardedBy: req.user!.id,
-        tieBreakLog: tieBreakLog || null
+        tieBreakLog: resolutionNote
       });
     }, {
       lockKeys: [`auction:${id}`],
@@ -2426,7 +2455,7 @@ app.post('/api/requirements/:id/award', authenticate, authorize(['SUPER_ADMIN', 
       `AWARD_CONTRACT: Requirement ${id} awarded to Transporter ${transporterId}`, 
       req, 
       null, 
-      tieBreakLog
+      resolutionNote
     );
 
     io.to(`req_${id}`).emit('rank_updated', { requirementId: id });
@@ -2754,7 +2783,7 @@ app.post('/api/v1/requirements', authenticate, authorize(['SUPER_ADMIN', 'LOGIST
         const reqId = `TR-${year}-${String(maxSerial + 1).padStart(4, '0')}`;
 
         const closingDate = r.bidClosingTime 
-          ? new Date(r.bidClosingTime).toISOString() 
+          ? parseClosingTimeAsInstant(r.bidClosingTime).toISOString() 
           : new Date(Date.now() + 2 * 3600 * 1000).toISOString(); // 2 hours default
 
         const targetedTransporters: string[] = r.eligibleTransporters || r.targeted_transporter_ids || [];

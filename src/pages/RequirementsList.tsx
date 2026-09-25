@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../lib/api';
+import { parseAsIst } from '../lib/istTime';
 import { useAuth } from '../components/AuthContext';
 import { 
   Plus, 
@@ -149,7 +150,12 @@ export default function RequirementsList() {
     setSubmitting(true);
     try {
       await api.post('/requirements', {
-        requirements: [singleForm]
+        requirements: [{
+          ...singleForm,
+          // datetime-local values are entered in IST; convert to a real UTC
+          // instant so the countdown and auto-close match what the user picked.
+          bidClosingTime: parseAsIst(singleForm.bidClosingTime).toISOString()
+        }]
       });
       setShowCreateModal(false);
       resetSingleForm();
@@ -243,7 +249,12 @@ export default function RequirementsList() {
     setSubmitting(true);
     try {
       await api.post('/requirements', {
-        requirements: bulkRows
+        requirements: bulkRows.map(row => ({
+          ...row,
+          // datetime-local values are entered in IST; convert to a real UTC
+          // instant so the countdown and auto-close match what the user picked.
+          bidClosingTime: parseAsIst(row.bidClosingTime).toISOString()
+        }))
       });
       setShowCreateModal(false);
       setBulkRows([
@@ -642,7 +653,7 @@ export default function RequirementsList() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Bidding Closing Time *</label>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Bidding Closing Time * (IST)</label>
                     <input
                       type="datetime-local"
                       required
@@ -827,7 +838,7 @@ export default function RequirementsList() {
                           </div>
 
                           <div>
-                            <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Bidding Closing Time</label>
+                            <label className="block text-[9px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Bidding Closing Time (IST)</label>
                             <input
                               type="datetime-local"
                               required
