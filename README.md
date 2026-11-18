@@ -10,7 +10,7 @@
 
 **https://www.fleexbid.live**
 
-- Hosting: Vercel (serverless) — free tier
+- Hosting: Vercel (serverless) — free tier version
 - Database: Neon Postgres — free tier (pooled connection)
 - AI: Google Gemini (rate prediction, transporter matching, negotiation drafts)
 
